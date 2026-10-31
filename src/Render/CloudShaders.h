@@ -290,19 +290,11 @@ cbuffer CloudCB : register(b0)
 
 Texture2D<float4> CloudTex : register(t0);
 Texture2D<float4> PrevCloudTex : register(t1);
-Texture2D<float> SceneDepth : register(t4);
 SamplerState LinearClamp : register(s0);
 
 float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
 {
     float2 uv = ndc * 0.5 + 0.5;
-    if (Params12.y > 0.0)
-    {
-        const float skyDepth = (Params12.z > 0.5) ? 0.0 : 1.0;
-        float sceneDepth = SceneDepth.SampleLevel(LinearClamp, uv, 0);
-        if (abs(sceneDepth - skyDepth) > Params12.y)
-            discard;
-    }
     float4 cur = CloudTex.SampleLevel(LinearClamp, uv, 0);
     float4 col = cur;
 
@@ -485,6 +477,17 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     float2 uv = ndc * 0.5 + 0.5;
     float shadow = ShadowMask.SampleLevel(LinearClampSampler, uv, 0).r;
     return float4(shadow, shadow, shadow, 1.0);
+}
+)";
+    inline constexpr char kDepthProbePS[] = R"(
+Texture2D<float> SceneDepth : register(t4);
+SamplerState LinearClamp : register(s0);
+
+float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
+{
+    float2 uv = ndc * 0.5 + 0.5;
+    float d = SceneDepth.SampleLevel(LinearClamp, uv, 0);
+    return float4(d, d, d, 1.0);
 }
 )";
 }

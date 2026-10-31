@@ -160,6 +160,11 @@ namespace RadClouds
         ID3D11Resource* g_depthSRVRes{ nullptr };
         bool g_loggedShadowNoDepth{ false };
         bool g_shadowReady{ false };
+        ID3D11PixelShader* g_depthProbePS{ nullptr };
+        ID3D11Texture2D* g_probeTex{ nullptr };
+        ID3D11RenderTargetView* g_probeRTV{ nullptr };
+        ID3D11Texture2D* g_probeReadback{ nullptr };
+        std::uint32_t g_probeCounter{ 0 };
         std::shared_ptr<spdlog::logger> Logger()
         {
             return spdlog::get("VolClouds");
@@ -289,6 +294,7 @@ namespace RadClouds
                 if (blob) blob->Release();
                 return ok;
             };
+            compilePS(Shaders::kDepthProbePS, &g_depthProbePS);
             const bool shadowMaskOk = compilePS(Shaders::kShadowMaskPS, &g_shadowMaskPS);
             const bool shadowMainOk = compilePS(Shaders::kCloudShadowPS, &g_cloudShadowPS);
             const bool shadowDebugOk = compilePS(Shaders::kShadowDebugPS, &g_shadowDebugPS);
@@ -450,6 +456,20 @@ namespace RadClouds
             }
             g_depthSRVRes = res;
             return g_depthSRV;
+        }
+
+        bool EnsureProbeResources(ID3D11Device* device)
+        {
+            if (g_probeTex) return true;
+            D3D11_TEXTURE2D_DESC desc{};
+            desc.Width = 64; desc.Height = 36; desc.MipLevels = 1; desc.ArraySize = 1;
+            desc.Format = DXGI_FORMAT_R32_FLOAT; desc.SampleDesc.Count = 1;
+            desc.Usage = D3D11_USAGE_DEFAULT; desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+            if (device->CreateTexture2D(&desc, nullptr, &g_probeTex) < 0) return false;
+            if (device->CreateRenderTargetView(g_probeTex, nullptr, &g_probeRTV) < 0) return false;
+            desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = 0; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            if (device->CreateTexture2D(&desc, nullptr, &g_probeReadback) < 0) return false;
+            return true;
         }
 
         bool EnsureDeviceResources()
@@ -787,7 +807,7 @@ namespace RadClouds
             cb.params9 = g_hasPrevCloud ? g_prevRows[2] : DirectX::XMFLOAT4{ 0, 0, 0, 0 };
             cb.params10 = { g_hasPrevCloud ? cfg.temporalBlend : 0.0f, 1.0f, cfg.fogCoupling, cfg.sunShafts };
             cb.params11 = { frame.cameraPos.x, frame.cameraPos.y, cfg.shadowExtent, 128.0f };
-            cb.params12 = { cfg.shadowStrength, cfg.compositeDepthEpsilon, frame.reversedDepth ? 1.0f : 0.0f, static_cast<float>(cfg.shadowDebug) };
+            cb.params12 = { cfg.shadowStrength, 0.0f, frame.reversedDepth ? 1.0f : 0.0f, static_cast<float>(cfg.shadowDebug) };
             cb.params13 = g_hasPrevCloud ? g_prevRow3 : DirectX::XMFLOAT4{ 0, 0, 0, 0 };
             const D3D11_MAPPED_SUBRESOURCE mapped = [&]() {
                 D3D11_MAPPED_SUBRESOURCE m{};
@@ -864,28 +884,13 @@ namespace RadClouds
             ctx->RSSetViewports(1, &savedViewport);
             ctx->OMSetRenderTargets(1, &mainRTV, mainDSV);
             ID3D11ShaderResourceView* compositeSRVs[2]{ g_cloudSRV[current], g_cloudSRV[previous] };
-            ID3D11ShaderResourceView* compositeDepth = DepthSRVFrom(ctx, mainDSV);
-            if (!compositeDepth) {
-                if (void* mapped = [&]() -> void* {
-                        D3D11_MAPPED_SUBRESOURCE m{};
-                        if (ctx->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m) < 0) return nullptr;
-                        cb.params12.y = 0.0f;
-                        std::memcpy(m.pData, &cb, sizeof(cb));
-                        ctx->Unmap(g_cb, 0);
-                        return m.pData;
-                    }())
-                    (void)mapped;
-            }
             ctx->PSSetShader(g_compositePS, nullptr, 0);
             ctx->PSSetShaderResources(0, 2, compositeSRVs);
-            ctx->PSSetShaderResources(4, 1, &compositeDepth);
             ctx->PSSetSamplers(0, 1, &g_clampSampler);
             ctx->OMSetBlendState(g_blend, nullptr, 0xFFFFFFFF);
-            ctx->OMSetDepthStencilState(g_depthNone, 0);
+            ctx->OMSetDepthStencilState(depthState, 0);
             ctx->RSSetState(g_raster);
             ctx->Draw(3, 0);
-            ID3D11ShaderResourceView* nullDepth = nullptr;
-            ctx->PSSetShaderResources(4, 1, &nullDepth);
             if (cfg.cloudShadows && g_shadowReady) {
                 ID3D11ShaderResourceView* depthSRV = DepthSRVFrom(ctx, mainDSV);
                 if (depthSRV && g_shadowMaskSRV) {
@@ -908,6 +913,46 @@ namespace RadClouds
                 ctx->OMSetDepthStencilState(g_depthNone, 0);
                 ctx->RSSetState(g_raster);
                 ctx->Draw(3, 0);
+            }
+
+            if (++g_probeCounter >= 600 && g_depthProbePS && mainDSV) {
+                g_probeCounter = 0;
+                ID3D11ShaderResourceView* probeDepth = DepthSRVFrom(ctx, mainDSV);
+                if (probeDepth && EnsureProbeResources(g_device)) {
+                    D3D11_VIEWPORT probeViewport{ 0.0f, 0.0f, 64.0f, 36.0f, 0.0f, 1.0f };
+                    ctx->RSSetViewports(1, &probeViewport);
+                    ctx->OMSetRenderTargets(1, &g_probeRTV, nullptr);
+                    ctx->PSSetShader(g_depthProbePS, nullptr, 0);
+                    ctx->PSSetShaderResources(4, 1, &probeDepth);
+                    ctx->PSSetSamplers(0, 1, &g_clampSampler);
+                    ctx->OMSetBlendState(g_blendOpaque, nullptr, 0xFFFFFFFF);
+                    ctx->OMSetDepthStencilState(g_depthNone, 0);
+                    ctx->Draw(3, 0);
+                    ctx->CopyResource(g_probeReadback, g_probeTex);
+                    D3D11_MAPPED_SUBRESOURCE mapped{};
+                    if (ctx->Map(g_probeReadback, 0, D3D11_MAP_READ, 0, &mapped) >= 0) {
+                        const float skyDepth = frame.reversedDepth ? 0.0f : 1.0f;
+                        std::uint32_t notFar = 0, samples = 0;
+                        float minD = 1e9f, maxD = -1e9f;
+                        for (int y = 0; y < 36; ++y) {
+                            const float* row = reinterpret_cast<const float*>(static_cast<const char*>(mapped.pData) + y * mapped.RowPitch);
+                            for (int x = 0; x < 64; ++x) {
+                                const float d = row[x];
+                                if (!std::isfinite(d)) continue;
+                                ++samples;
+                                minD = std::min(minD, d);
+                                maxD = std::max(maxD, d);
+                                if (std::abs(d - skyDepth) > 0.0015f) ++notFar;
+                            }
+                        }
+                        ctx->Unmap(g_probeReadback, 0);
+                        if (auto logger = Logger())
+                            logger->info("[Clouds] Depth probe: target {}x{} samples={} notFar={} min={:.6f} max={:.6f} reversed={}",
+                                target.width, target.height, samples, notFar, minD, maxD, frame.reversedDepth);
+                    }
+                    ctx->RSSetViewports(1, &savedViewport);
+                    ctx->OMSetRenderTargets(1, &mainRTV, mainDSV);
+                }
             }
 
             ID3D11ShaderResourceView* noSRVs[3]{ nullptr, nullptr, nullptr };

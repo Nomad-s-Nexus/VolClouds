@@ -153,6 +153,7 @@ namespace RadClouds
         ID3D11ShaderResourceView* g_depthSRV{ nullptr };
         ID3D11Resource* g_depthSRVRes{ nullptr };
         bool g_loggedShadowNoDepth{ false };
+        bool g_shadowReady{ false };
         std::shared_ptr<spdlog::logger> Logger()
         {
             return spdlog::get("VolClouds");
@@ -282,9 +283,12 @@ namespace RadClouds
                 if (blob) blob->Release();
                 return ok;
             };
-            if (!compilePS(Shaders::kShadowMaskPS, &g_shadowMaskPS)) return false;
-            if (!compilePS(Shaders::kCloudShadowPS, &g_cloudShadowPS)) return false;
-            if (!compilePS(Shaders::kShadowDebugPS, &g_shadowDebugPS)) return false;
+            const bool shadowMaskOk = compilePS(Shaders::kShadowMaskPS, &g_shadowMaskPS);
+            const bool shadowMainOk = compilePS(Shaders::kCloudShadowPS, &g_cloudShadowPS);
+            const bool shadowDebugOk = compilePS(Shaders::kShadowDebugPS, &g_shadowDebugPS);
+            g_shadowReady = shadowMaskOk && shadowMainOk && shadowDebugOk;
+            if (!g_shadowReady && Logger())
+                Logger()->warn("[Clouds] Cloud shadow shaders unavailable; shadows disabled, clouds continue.");
 
             D3D11_BLEND_DESC multiplyDesc{};
             multiplyDesc.RenderTarget[0].BlendEnable = TRUE;
@@ -292,7 +296,10 @@ namespace RadClouds
             multiplyDesc.RenderTarget[0].DestBlend = D3D11_BLEND_SRC_COLOR;
             multiplyDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
             multiplyDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-            if (FAILED(device->CreateBlendState(&multiplyDesc, &g_blendMultiply))) return false;
+            if (FAILED(device->CreateBlendState(&multiplyDesc, &g_blendMultiply))) {
+                g_shadowReady = false;
+                if (Logger()) Logger()->warn("[Clouds] Multiply blend state creation failed; shadows disabled.");
+            }
             D3D11_BUFFER_DESC cbDesc{};
             cbDesc.ByteWidth = sizeof(CloudCB);
             cbDesc.Usage = D3D11_USAGE_DYNAMIC;
@@ -830,7 +837,7 @@ namespace RadClouds
                 ctx->RSSetState(g_raster);
                 ctx->Draw(3, 0);
             }
-            if (cfg.cloudShadows && EnsureShadowMask(g_device)) {
+            if (cfg.cloudShadows && g_shadowReady && EnsureShadowMask(g_device)) {
                 D3D11_VIEWPORT maskViewport{ 0.0f, 0.0f, 128.0f, 128.0f, 0.0f, 1.0f };
                 ctx->RSSetViewports(1, &maskViewport);
                 ctx->OMSetRenderTargets(1, &g_shadowMaskRTV, nullptr);
@@ -853,7 +860,7 @@ namespace RadClouds
             ctx->OMSetDepthStencilState(depthState, 0);
             ctx->RSSetState(g_raster);
             ctx->Draw(3, 0);
-            if (cfg.cloudShadows) {
+            if (cfg.cloudShadows && g_shadowReady) {
                 ID3D11ShaderResourceView* depthSRV = DepthSRVFrom(ctx, mainDSV);
                 if (depthSRV && g_shadowMaskSRV) {
                     ctx->PSSetShader(g_cloudShadowPS, nullptr, 0);
@@ -867,7 +874,7 @@ namespace RadClouds
                 }
             }
 
-            if (cfg.shadowDebug > 0 && g_shadowMaskSRV) {
+            if (cfg.shadowDebug > 0 && g_shadowReady && g_shadowMaskSRV) {
                 ctx->PSSetShader(g_shadowDebugPS, nullptr, 0);
                 ctx->PSSetShaderResources(3, 1, &g_shadowMaskSRV);
                 ctx->PSSetSamplers(0, 1, &g_clampSampler);

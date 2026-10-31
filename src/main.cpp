@@ -118,7 +118,7 @@ namespace
 
 F4SE_PLUGIN_VERSION = []() noexcept {
     F4SE::PluginVersionData data{};
-    data.PluginVersion(REL::Version(0, 5, 2));
+    data.PluginVersion(REL::Version(0, 5, 3));
     data.PluginName("Volumetric Clouds");
     data.AuthorName("NomadsReach");
     data.UsesSigScanning(false);

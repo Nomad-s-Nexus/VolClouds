@@ -128,28 +128,33 @@ float LayerDensity(float3 p, float bottom, float top, float coverage, float scal
 
     float2 windDir = float2(cos(WindAndTime.x), sin(WindAndTime.x)) * WindAndTime.y * 0.0025 * windSign;
     float3 wind = float3(windDir.x, windDir.y, 0.0) * WindAndTime.z;
-    float3 q = p * (0.00002 * Params1.y * scale) + wind;
+    float3 q = p * (0.0000015 * Params1.y * scale) + wind;
 
-    float warp = Fbm(q * 0.55 + 3.1, 2);
-    q += float3(warp, warp * 0.6, warp * 0.3) * 1.8;
+    float warpA = Noise3(q * 0.5 + 7.3);
+    float warpB = Noise3(q * 0.9 + 19.1);
+    float3 warped = q + float3(warpA - 0.5, warpB - 0.5, (warpA + warpB) * 0.25 - 0.25) * 2.2;
 
-    float billow = Billow(q);
-    float detail = Fbm(q * 1.7 + 21.0, 2);
+    float base = Noise3(warped);
+    float mid = Noise3(warped * 2.1 + 11.7);
+    float shape = saturate((base * 0.8 + mid * 0.2 - 0.35) * 2.6);
+
+    float erosion = Noise3(warped * 3.3 + 31.9);
+    float shaped = saturate(shape * (0.80 + 0.20 * erosion));
+
     if (Params6.x > 0.5)
     {
-        float3 uv = q * 0.55;
-        float3 n1 = CloudNoise.SampleLevel(LinearWrapSampler, uv, 0).rgb;
-        float3 n2 = CloudNoise.SampleLevel(LinearWrapSampler, uv * 2.7 + 0.31, 0).rgb;
-        billow = saturate(billow * 0.65 + saturate((n1.r * 0.6 + n1.g * 0.4 - 0.2) * 2.0) * 0.35);
-        detail = saturate(detail * 0.5 + n2.b * 0.5);
+        float3 uv = q * 0.02 + float3(warpA * 0.25, warpB * 0.25, 0.0);
+        float4 n1 = CloudNoise.SampleLevel(LinearWrapSampler, uv, 0);
+        float4 n2 = CloudNoise.SampleLevel(LinearWrapSampler, uv * 2.7 + 0.31, 0);
+        float textureShape = saturate((n1.r * 0.8 + n1.g * 0.2 - 0.15) * 2.2);
+        shaped = saturate(shape * 0.55 + textureShape * (0.30 + 0.15 * n2.b));
     }
-    float n = saturate((billow * 0.85 + detail * 0.15 - 0.30) * 2.2);
 
-    float threshold = lerp(0.75, 0.25, saturate(coverage));
-    float d = max(0.0, n - threshold) / max(1.0 - threshold, 1e-4);
-    d = saturate(d) * saturate(d + 0.25);
+    float threshold = lerp(0.52, 0.16, saturate(coverage));
+    float d = saturate((shaped - threshold) / max(1.0 - threshold, 1e-4));
+    d = d * d * (3.0 - 2.0 * d);
 
-    float verticalProfile = smoothstep(0.0, 0.10, height01) * (1.0 - smoothstep(0.30, 0.85, height01));
+    float verticalProfile = smoothstep(0.0, 0.12, height01) * (1.0 - smoothstep(0.55, 1.0, height01));
     return d * verticalProfile;
 }
 
@@ -253,8 +258,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     }
 
     float edgeFade = 1.0 - smoothstep(Params1.x * 0.6, Params1.x, t1);
-    float slabThickness = max(Params0.y - Params0.x, 1.0);
-    float grazingFade = smoothstep(0.0, 0.12, (t1 - t0) / slabThickness);
+    float grazingFade = smoothstep(0.0, 0.13, dir.z);
     float alpha = saturate((1.0 - transmittance) * Params1.w * edgeFade * grazingFade * (1.0 + (pixDither - 0.5) * 0.005));
     if (alpha <= 0.002)
         discard;

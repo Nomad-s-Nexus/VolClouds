@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.7.3 - coherent cloud density, elevation fade
+
+- `CloudShaders.h:LayerDensity` rewritten: two noise warps, one low-frequency base and one mid-frequency
+  octave, a small erosion term, and a smootherstep coverage remap. Noise frequency is 1.5e-6 per unit
+  (about 660,000 units, i.e. cloud masses instead of per-pixel speckle); the previous 2e-5 gave 50,000-unit
+  features which at 1,000,000-unit viewing distance are only a few pixels and read as static.
+- Slab edge: the hard circular boundary came from the grazing-slab path fade; it is replaced by an
+  elevation fade `smoothstep(0, 0.13, dir.z)`, which is zero exactly at the horizon where the ray stops
+  crossing the layer.
+- Offline headless render (WARP, fixed camera, real `kCloudPS`): 35-degree pitch now shows coherent cloud
+  masses, mean alpha 0.10, max 0.70, no per-pixel static. 12-degree pitch still shows a speckled band and
+  a visible boundary; that remains open and is not claimed fixed.
+
 ## v0.7.2 - horizon fade and deployed config units
 
 - In-game run showed TMR still loading the pre-unit-change `clouds.json` (layer 3500-9000, density 3.0,

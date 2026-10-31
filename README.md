@@ -64,6 +64,22 @@ xmake build -y VolClouds
 The DLL is written to `build/release/VolClouds.dll`. CI does the same on `windows-latest`, cloning
 `G-A-R-D-E-N/commonlibf4-nomad` at a pinned commit.
 
+## Troubleshooting
+
+Check `Documents/My Games/Fallout4/F4SE/VolClouds.log` first, and `VolClouds.bootstrap.log` next to it
+(it records whether F4SE asked the plugin to load at all).
+
+| Symptom | Meaning |
+|---|---|
+| No `VolClouds.log` and no `VolClouds.bootstrap.log` | F4SE never loaded the DLL. Check `f4se.log`: a `no version data` line means the DLL is rejected (this build exports `F4SEPlugin_Version`, so update to 0.1.1+); also confirm the DLL is really in `Data/F4SE/Plugins/`. |
+| `bootstrap.log` has `query: supported=0` | Unsupported game runtime (only OG 1.10.163 and AE 1.11.240 are loaded). |
+| Log has `Hook fired but bEnabled=false` | Config found but disabled: set `"bEnabled": true` in `Data/F4SE/Plugins/VolClouds/clouds.json`. |
+| Log says `No config at ...` | Config missing from `Data/F4SE/Plugins/VolClouds/clouds.json`. |
+| Log has `Sky mode N ... clouds skipped` | Sky is not in dome/full mode (interior or menu scene). |
+| Log has `Waiting for last cloud layer ...` | Hook fires, but the pass filter never matched (record the line and report it). |
+| Log has `Bound target rejected: ...` | The pass is running on a non-main target or unexpected format; the line prints format and size. |
+| Log has `First draw: ...` and statistics every ~600 calls | The pass is rendering; tune density/coverage/depth mode. |
+
 ## Known limitations
 
 - Not yet verified in game; sun direction, depth convention and density are expected to need a

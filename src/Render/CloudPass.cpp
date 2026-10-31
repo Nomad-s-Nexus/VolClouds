@@ -102,6 +102,22 @@ namespace RadClouds
         bool g_loggedNoDepth{ false };
         bool g_loggedTargetSkip{ false };
         std::uint32_t g_lastFrame{ 0xFFFFFFFFu };
+        std::uint64_t g_hookCalls{ 0 };
+        std::uint64_t g_draws{ 0 };
+        std::uint64_t g_skipDisabled{ 0 };
+        std::uint64_t g_skipMode{ 0 };
+        std::uint64_t g_skipPass{ 0 };
+        std::uint64_t g_skipTarget{ 0 };
+        std::uint64_t g_skipDevice{ 0 };
+        std::uint64_t g_skipGather{ 0 };
+        bool g_firstHookLogged{ false };
+        bool g_disabledLogged{ false };
+        bool g_modeLogged{ false };
+        bool g_passLogged{ false };
+        bool g_targetLogged{ false };
+        bool g_deviceLogged{ false };
+        bool g_gatherLogged{ false };
+        bool g_firstDrawLogged{ false };
         void* g_failedDevice{ nullptr };
         std::chrono::steady_clock::time_point g_startTime{};
         REL::Relocation<SetupGeometryFn> g_original;
@@ -474,7 +490,16 @@ namespace RadClouds
             CachedShaderState s_{};
         };
 
-        bool IsMainSceneTarget(ID3D11DeviceContext* ctx, std::uint32_t expectedWidth, std::uint32_t expectedHeight)
+        struct TargetInfo
+        {
+            std::uint32_t format{ 0 };
+            std::uint32_t width{ 0 };
+            std::uint32_t height{ 0 };
+            std::uint32_t arraySize{ 0 };
+            std::uint32_t samples{ 0 };
+        };
+
+        bool IsMainSceneTarget(ID3D11DeviceContext* ctx, std::uint32_t expectedWidth, std::uint32_t expectedHeight, TargetInfo* outInfo)
         {
             ID3D11RenderTargetView* rtv = nullptr;
             ctx->OMGetRenderTargets(1, &rtv, nullptr);
@@ -490,6 +515,8 @@ namespace RadClouds
             D3D11_TEXTURE2D_DESC desc{};
             tex->GetDesc(&desc);
             tex->Release();
+            if (outInfo)
+                *outInfo = { static_cast<std::uint32_t>(desc.Format), desc.Width, desc.Height, desc.ArraySize, desc.SampleDesc.Count };
             if (desc.ArraySize > 1) return false;
             if (desc.SampleDesc.Count > 1) return false;
             if (desc.Format != DXGI_FORMAT_R11G11B10_FLOAT && desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) return false;
@@ -562,17 +589,27 @@ namespace RadClouds
             ctx->Draw(3, 0);
         }
 
-        bool IsLastCloudLayerPass(void* a_pass, const RE::Sky* sky)
+        struct CloudPassInfo
+        {
+            bool hasProperty{ false };
+            int skyObjectType{ -1 };
+            std::uint32_t layer{ 0 };
+            std::uint32_t numLayers{ 0 };
+        };
+
+        bool IsLastCloudLayerPass(void* a_pass, const RE::Sky* sky, CloudPassInfo* outInfo)
         {
             if (!a_pass) return false;
             auto* property = *reinterpret_cast<void**>(reinterpret_cast<char*>(a_pass) + 0x10);
             if (!property) return false;
             const auto skyObjectType = *reinterpret_cast<const int*>(reinterpret_cast<const char*>(property) + 0xA8);
-            if (skyObjectType != 3) return false;
             const auto layer = *reinterpret_cast<const std::uint16_t*>(reinterpret_cast<const char*>(property) + 0xA4);
             auto* clouds = *reinterpret_cast<void**>(const_cast<char*>(reinterpret_cast<const char*>(sky)) + 0x88);
+            const auto numLayers = clouds ? *reinterpret_cast<const std::uint16_t*>(reinterpret_cast<const char*>(clouds) + 0x510) : 0;
+            if (outInfo)
+                *outInfo = { true, static_cast<int>(skyObjectType), static_cast<std::uint32_t>(layer), static_cast<std::uint32_t>(numLayers) };
+            if (skyObjectType != 3) return false;
             if (!clouds) return true;
-            const auto numLayers = *reinterpret_cast<const std::uint16_t*>(reinterpret_cast<const char*>(clouds) + 0x510);
             if (numLayers == 0) return true;
             return layer + 1 >= numLayers;
         }
@@ -582,12 +619,26 @@ namespace RadClouds
             if (g_original)
                 g_original(a_shader, a_pass);
 
+            const auto callIndex = ++g_hookCalls;
+            auto logger = Logger();
+            if (!g_firstHookLogged) {
+                g_firstHookLogged = true;
+                if (logger) logger->info("[Clouds] SetupGeometry hook fired (first call).");
+            }
+
             Config cfg;
             {
                 std::scoped_lock lock(g_mutex);
                 cfg = g_config;
             }
-            if (!cfg.enabled) return;
+            if (!cfg.enabled) {
+                ++g_skipDisabled;
+                if (!g_disabledLogged) {
+                    g_disabledLogged = true;
+                    if (logger) logger->info("[Clouds] Hook fired but bEnabled=false; pass skipped.");
+                }
+                return;
+            }
 
             auto* graphicsState = RE::BSGraphics::State::GetSingleton();
             auto* sky = RE::Sky::GetSingleton();
@@ -595,29 +646,76 @@ namespace RadClouds
 
             const auto frame = graphicsState->frameID;
             if (frame == g_lastFrame) return;
+
             const auto mode = SkyModeRaw(sky);
-            if (mode != 2 && mode != 3) return;
-            if (!IsLastCloudLayerPass(a_pass, sky)) return;
+            if (mode != 2 && mode != 3) {
+                ++g_skipMode;
+                if (!g_modeLogged) {
+                    g_modeLogged = true;
+                    if (logger) logger->info("[Clouds] Sky mode {} (0 none, 1 interior, 2 dome, 3 full); clouds skipped.", mode);
+                }
+                return;
+            }
+
+            CloudPassInfo passInfo{};
+            if (!IsLastCloudLayerPass(a_pass, sky, &passInfo)) {
+                ++g_skipPass;
+                if (!g_passLogged) {
+                    g_passLogged = true;
+                    if (logger) logger->info("[Clouds] Waiting for last cloud layer: hasProperty={} skyObjectType={} layer={}/{}.",
+                        passInfo.hasProperty, passInfo.skyObjectType, passInfo.layer, passInfo.numLayers);
+                }
+                return;
+            }
 
             if (!g_vs || !g_ps || !g_cb) {
-                if (!EnsureDeviceResources()) return;
+                if (!EnsureDeviceResources()) {
+                    ++g_skipDevice;
+                    if (!g_deviceLogged) {
+                        g_deviceLogged = true;
+                        if (logger) logger->warn("[Clouds] Device/shader resources unavailable; see earlier errors.");
+                    }
+                    return;
+                }
             }
             auto* data = RE::BSGraphics::GetRendererData();
             if (!data || !data->context) return;
             auto* ctx = reinterpret_cast<ID3D11DeviceContext*>(data->context);
-            if (!IsMainSceneTarget(ctx, graphicsState->screenWidth, graphicsState->screenHeight)) {
-                if (!g_loggedTargetSkip) {
-                    g_loggedTargetSkip = true;
-                    if (auto logger = Logger()) logger->info("[Clouds] Skipping cloud draw on a non-main render target.");
+            TargetInfo target{};
+            if (!IsMainSceneTarget(ctx, graphicsState->screenWidth, graphicsState->screenHeight, &target)) {
+                ++g_skipTarget;
+                if (!g_targetLogged) {
+                    g_targetLogged = true;
+                    if (logger) logger->info("[Clouds] Bound target rejected: format={} {}x{} samples={} array={} (screen {}x{}).",
+                        target.format, target.width, target.height, target.samples, target.arraySize,
+                        graphicsState->screenWidth, graphicsState->screenHeight);
                 }
                 return;
             }
 
             const FrameState state = GatherFrameState(graphicsState, sky, cfg);
-            if (!state.valid) return;
+            if (!state.valid) {
+                ++g_skipGather;
+                if (!g_gatherLogged) {
+                    g_gatherLogged = true;
+                    if (logger) logger->warn("[Clouds] Frame state invalid (matrix/camera); clouds skipped.");
+                }
+                return;
+            }
 
             RenderClouds(ctx, state, cfg);
+            ++g_draws;
             g_lastFrame = frame;
+            if (!g_firstDrawLogged) {
+                g_firstDrawLogged = true;
+                if (logger) logger->info("[Clouds] First draw: target {}x{} sunDir=({:.2f},{:.2f},{:.2f}) coverage={:.2f} reversedDepth={} depthMode={}.",
+                    target.width, target.height, state.sunDir.x, state.sunDir.y, state.sunDir.z,
+                    state.coverage, state.reversedDepth, cfg.depthMode);
+            }
+            if (callIndex % 600 == 0 && logger) {
+                logger->info("[Clouds] Stats: calls={} draws={} skipped(disabled={} mode={} pass={} target={} device={} gather={}).",
+                    g_hookCalls, g_draws, g_skipDisabled, g_skipMode, g_skipPass, g_skipTarget, g_skipDevice, g_skipGather);
+            }
         }
     }
 
@@ -637,8 +735,10 @@ namespace RadClouds
             vtable.write_vfunc(kSetupGeometryVTableSlot, &Hook_SetupGeometry);
             g_startTime = std::chrono::steady_clock::now();
             g_installed = true;
-            if (auto logger = Logger())
+            if (auto logger = Logger()) {
                 logger->info("[Clouds] BSSkyShader::SetupGeometry hook installed (vtable slot {}).", kSetupGeometryVTableSlot);
+                logger->info("[Clouds] Config enabled={} (file '{}').", g_config.enabled, kConfigPath);
+            }
         }
         catch (const std::exception& ex)
         {

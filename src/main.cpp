@@ -57,6 +57,22 @@ namespace
         return std::filesystem::path{ L"VolCloudsLogs" };
     }
 
+    void BootstrapLog(const std::string& a_line) noexcept
+    {
+        try
+        {
+            const auto directory = GetLogDirectory();
+            std::error_code ec;
+            std::filesystem::create_directories(directory, ec);
+            std::ofstream file(directory / L"VolClouds.bootstrap.log", std::ios::app);
+            if (file.is_open())
+                file << a_line << '\n';
+        }
+        catch (...)
+        {
+        }
+    }
+
     void InitializeLogger()
     {
         try
@@ -100,6 +116,21 @@ namespace
     }
 }
 
+F4SE_PLUGIN_VERSION = []() noexcept {
+    F4SE::PluginVersionData data{};
+    data.PluginVersion(REL::Version(0, 1, 1));
+    data.PluginName("Volumetric Clouds");
+    data.AuthorName("NomadsReach");
+    data.UsesSigScanning(false);
+    data.UsesAddressLibrary(true);
+    data.UsesAddressLibraryNG(true);
+    data.HasNoStructUse(false);
+    data.IsLayoutDependent(true);
+    data.IsLayoutDependentNG(true);
+    data.CompatibleVersions({});
+    return data;
+}();
+
 extern "C" __declspec(dllexport) bool F4SEAPI
 F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
 {
@@ -114,12 +145,15 @@ F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
         return false;
 
     g_gameVersion = DetectGameVersion(a_f4se);
-    return g_gameVersion == GameVersion::OG || g_gameVersion == GameVersion::AE;
+    const bool supported = g_gameVersion == GameVersion::OG || g_gameVersion == GameVersion::AE;
+    BootstrapLog(std::string("query: editor=0 supported=") + (supported ? "1" : "0"));
+    return supported;
 }
 
 extern "C" __declspec(dllexport) bool F4SEAPI
 F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 {
+    BootstrapLog("load: enter");
     F4SE::Init(a_f4se, { .log = false });
 
     if (g_gameVersion == GameVersion::Unknown)
@@ -134,6 +168,11 @@ F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
     }
 
     logger->info("Runtime: {}", GameVersionString(g_gameVersion));
+    {
+        std::error_code ec;
+        const auto config = std::filesystem::current_path(ec) / L"Data/F4SE/Plugins/VolClouds/clouds.json";
+        logger->info("Config expected at '{}' (exists={}).", config.string(), std::filesystem::exists(config, ec));
+    }
 
     auto* messaging = F4SE::GetMessagingInterface();
     if (!messaging) {

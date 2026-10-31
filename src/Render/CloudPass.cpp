@@ -812,14 +812,24 @@ namespace RadClouds
         try
         {
             // TODO-verify the AE vtable slot index before enabling there.
+            // TODO-verify the AE vtable base against the AE address-library map.
             REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE::BSSkyShader[0] };
+            std::uintptr_t altVtable = 0;
+            try {
+                REL::Relocation<std::uintptr_t> alt{ RE::VTABLE::BSSkyShader[1] };
+                altVtable = alt.get();
+            }
+            catch (...) {
+                altVtable = 0;
+            }
             auto** slots = reinterpret_cast<void**>(vtable.get());
             g_original = reinterpret_cast<std::uintptr_t>(slots[kSetupGeometryVTableSlot]);
             vtable.write_vfunc(kSetupGeometryVTableSlot, &Hook_SetupGeometry);
             g_startTime = std::chrono::steady_clock::now();
             g_installed = true;
             if (auto logger = Logger()) {
-                logger->info("[Clouds] BSSkyShader::SetupGeometry hook installed (vtable slot {}).", kSetupGeometryVTableSlot);
+                logger->info("[Clouds] BSSkyShader::SetupGeometry hook installed (vtable slot {}); vtable base 0x{:X} (alt vtable 0x{:X}).",
+                    kSetupGeometryVTableSlot, vtable.get(), altVtable);
                 logger->info("[Clouds] Config enabled={} (file '{}').", g_config.enabled, kConfigPath);
             }
         }

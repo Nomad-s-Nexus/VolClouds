@@ -1,6 +1,5 @@
 #pragma once
 
-// TODO-verify cloud look constants in game before treating them as final art direction.
 
 namespace RadClouds::Shaders
 {
@@ -23,10 +22,10 @@ cbuffer CloudCB : register(b0)
     float4 Params7;
     float4 Params8;
     float4 Params9;
-    float4 Params10;  // x temporal blend, y exposure scale, z fog coupling, w sun shaft strength
-    float4 Params11;  // x shadow center X, y shadow center Y, z extent, w mask resolution
-    float4 Params12;  // x shadow strength, y far threshold, z reversed depth flag, w shadow debug mode
-    float4 Params13;  // previous view-proj row 3 (for perspective divide)
+    float4 Params10;
+    float4 Params11;
+    float4 Params12;
+    float4 Params13;
 };
 
 struct VSOut
@@ -54,20 +53,20 @@ cbuffer CloudCB : register(b0)
     float4 SunColor;
     float4 AmbientColor;
     float4 WindAndTime;
-    float4 Params0;   // low layer: bottom, top, density, steps
-    float4 Params1;   // max distance, noise scale, flash, overall alpha
-    float4 Params2;   // far z, near z, far z, debug mode
-    float4 Params3;   // high layer: bottom, top, density, coverage
-    float4 Params4;   // phase g, powder, ambient boost, horizon fade
-    float4 Params5;   // storm darken, storm coverage, cirrus, low coverage
-    float4 Params6;   // x has noise volume
-    float4 Params7;   // previous view-proj row 0
-    float4 Params8;   // previous view-proj row 1
-    float4 Params9;   // previous view-proj row 2
-    float4 Params10;  // x temporal blend, y exposure scale, z fog coupling, w sun shaft strength
-    float4 Params11;  // x shadow center X, y shadow center Y, z extent, w mask resolution
-    float4 Params12;  // x shadow strength, y far threshold, z reversed depth flag, w shadow debug mode
-    float4 Params13;  // previous view-proj row 3 (for perspective divide)
+    float4 Params0;
+    float4 Params1;
+    float4 Params2;
+    float4 Params3;
+    float4 Params4;
+    float4 Params5;
+    float4 Params6;
+    float4 Params7;
+    float4 Params8;
+    float4 Params9;
+    float4 Params10;
+    float4 Params11;
+    float4 Params12;
+    float4 Params13;
 };
 
 Texture3D<float4> CloudNoise : register(t0);
@@ -283,10 +282,10 @@ cbuffer CloudCB : register(b0)
     float4 Params7;
     float4 Params8;
     float4 Params9;
-    float4 Params10;  // x temporal blend, y exposure scale, z fog coupling, w sun shaft strength
-    float4 Params11;  // x shadow center X, y shadow center Y, z extent, w mask resolution
-    float4 Params12;  // x shadow strength, y far threshold, z reversed depth flag, w shadow debug mode
-    float4 Params13;  // previous view-proj row 3 (for perspective divide)
+    float4 Params10;
+    float4 Params11;
+    float4 Params12;
+    float4 Params13;
 };
 
 Texture2D<float4> CloudTex : register(t0);

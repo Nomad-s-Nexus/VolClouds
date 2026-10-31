@@ -28,7 +28,6 @@
 #include <dxgi.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
-// TODO-verify the hook slot and sky offsets at runtime before enabling by default.
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -45,10 +44,10 @@ namespace RadClouds
         struct alignas(16) CloudCB
         {
             DirectX::XMFLOAT4X4 invViewProj; DirectX::XMFLOAT4 cameraPos;
-            DirectX::XMFLOAT4 sunDir;      // w = intensity
+            DirectX::XMFLOAT4 sunDir;
             DirectX::XMFLOAT4 sunColor; DirectX::XMFLOAT4 ambientColor;
-            DirectX::XMFLOAT4 windAndTime; // x angle, y speed, z time, w coverage
-            DirectX::XMFLOAT4 params0;     // x bottom, y top, z density, w steps
+            DirectX::XMFLOAT4 windAndTime;
+            DirectX::XMFLOAT4 params0;
             DirectX::XMFLOAT4 params1; DirectX::XMFLOAT4 params2;
             DirectX::XMFLOAT4 params3;
             DirectX::XMFLOAT4 params4;
@@ -471,12 +470,12 @@ namespace RadClouds
             for (std::uint32_t i = 0; i < layers; ++i)
             {
                 if ((weather->cloudLayerDisabledBits & (1u << i)) != 0) continue;
-                coverage = std::max(coverage, weather->cloudAlpha[i][1]);  // ColorTime::kDay
+                coverage = std::max(coverage, weather->cloudAlpha[i][1]);
             }
-            const auto flags = static_cast<std::uint8_t>(weather->weatherData[0xB]);  // WeatherData::kFlags
-            if (flags & 0x2) coverage = std::max(coverage, 0.45f);  // cloudy
-            if (flags & 0x4) coverage = std::max(coverage, 0.65f);  // rainy
-            if (flags & 0x8) coverage = std::max(coverage, 0.70f);  // snow
+            const auto flags = static_cast<std::uint8_t>(weather->weatherData[0xB]);
+            if (flags & 0x2) coverage = std::max(coverage, 0.45f);
+            if (flags & 0x4) coverage = std::max(coverage, 0.65f);
+            if (flags & 0x8) coverage = std::max(coverage, 0.70f);
             return std::clamp(coverage, 0.0f, 1.0f);
         }
         FrameState GatherFrameState(const RE::BSGraphics::State* graphicsState, const RE::Sky* sky, const Config& cfg)
@@ -554,7 +553,6 @@ namespace RadClouds
             }
             if (sky->sun && sky->sun->light)
             {
-                // TODO-verify light axis convention; force above-horizon like the engine does.
                 const auto* lightNode = reinterpret_cast<const RE::NiAVObject*>(sky->sun->light.get());
                 const auto& rot = lightNode->GetWorldRotate();
                 DirectX::XMFLOAT3 dir{ -rot[0][2], -rot[1][2], -rot[2][2] };
@@ -576,7 +574,7 @@ namespace RadClouds
             }
             const float dayBase = std::clamp(out.sunDir.z * 1.6f + 0.25f, 0.05f, 1.0f);
             out.sunDir.z = std::max(out.sunDir.z, 0.15f);
-            const RE::NiColor sunTint = sky->skyColor[4];  // ColorType::kSunlight
+            const RE::NiColor sunTint = sky->skyColor[4];
             const RE::NiColor skyUpper = sky->skyColor[0];
             out.sunColor = { std::max(sunTint.r, 0.15f) * dayBase, std::max(sunTint.g, 0.15f) * dayBase,
                 std::max(sunTint.b, 0.15f) * dayBase };
@@ -904,7 +902,6 @@ namespace RadClouds
         bool IsCloudPass(void* a_pass, const RE::Sky* sky, CloudPassInfo* outInfo)
         {
             if (!a_pass) return false;
-            // TODO-verify BSRenderPass::pShaderProperty offset while no BSRenderPass header exists.
             void* property = *reinterpret_cast<void**>(reinterpret_cast<char*>(a_pass) + 0x10);
             if (!property) return false;
 #if VOLCLOUDS_TYPED_SKY
@@ -928,7 +925,6 @@ namespace RadClouds
         void* SkyPropertyOfPass(void* a_pass)
         {
             if (!a_pass) return nullptr;
-            // TODO-verify BSRenderPass::pShaderProperty offset while no BSRenderPass header exists.
             return *reinterpret_cast<void**>(reinterpret_cast<char*>(a_pass) + 0x10);
         }
         void PollHotkeys()
@@ -1089,8 +1085,6 @@ namespace RadClouds
         LoadConfigLocked();
         try
         {
-            // TODO-verify the AE vtable slot index before enabling there.
-            // TODO-verify the AE vtable base against the AE address-library map.
             REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE::BSSkyShader[0] };
             std::uintptr_t altVtable = 0;
             try {

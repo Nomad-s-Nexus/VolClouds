@@ -19,6 +19,11 @@ cbuffer CloudCB : register(b0)
     float4 Params3;
     float4 Params4;
     float4 Params5;
+    float4 Params6;
+    float4 Params7;
+    float4 Params8;
+    float4 Params9;
+    float4 Params10;  // x temporal blend, y exposure scale, z fog coupling, w sun shaft strength
 };
 
 struct VSOut
@@ -53,6 +58,10 @@ cbuffer CloudCB : register(b0)
     float4 Params4;   // phase g, powder, ambient boost, horizon fade
     float4 Params5;   // storm darken, storm coverage, cirrus, low coverage
     float4 Params6;   // x has noise volume
+    float4 Params7;   // previous view-proj row 0
+    float4 Params8;   // previous view-proj row 1
+    float4 Params9;   // previous view-proj row 2
+    float4 Params10;  // x temporal blend, y exposure scale, z fog coupling, w sun shaft strength
 };
 
 Texture3D<float4> CloudNoise : register(t0);
@@ -246,6 +255,59 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     color += sunTint * flash * 0.18;
     color += sunTint * pow(saturate(cosSun), 6.0) * 0.10 * (1.0 - transmittance);
     return float4(color, alpha);
+}
+)";
+
+    inline constexpr char kCompositePS[] = R"(
+cbuffer CloudCB : register(b0)
+{
+    row_major float4x4 InvViewProj;
+    float4 CameraPos;
+    float4 SunDir;
+    float4 SunColor;
+    float4 AmbientColor;
+    float4 WindAndTime;
+    float4 Params0;
+    float4 Params1;
+    float4 Params2;
+    float4 Params3;
+    float4 Params4;
+    float4 Params5;
+    float4 Params6;
+    float4 Params7;
+    float4 Params8;
+    float4 Params9;
+    float4 Params10;
+};
+
+Texture2D<float4> CloudTex : register(t0);
+Texture2D<float4> PrevCloudTex : register(t1);
+SamplerState LinearClamp : register(s0);
+
+float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
+{
+    float2 uv = ndc * 0.5 + 0.5;
+    float4 cur = CloudTex.SampleLevel(LinearClamp, uv, 0);
+    float4 col = cur;
+
+    if (Params10.x > 0.001)
+    {
+        float4 farH = mul(float4(ndc, Params2.z, 1.0), InvViewProj);
+        float3 dir = normalize(farH.xyz / farH.w - CameraPos.xyz);
+        float4 wp = float4(CameraPos.xyz + dir * 6000.0, 1.0);
+        float2 prevNdc = float2(dot(Params7, wp), dot(Params8, wp)) * 0.5 + 0.5;
+        if (all(prevNdc > 0.001) && all(prevNdc < 0.999))
+        {
+            float4 prev = PrevCloudTex.SampleLevel(LinearClamp, prevNdc, 0);
+            col.rgb = lerp(cur.rgb, prev.rgb, Params10.x);
+            col.a = lerp(cur.a, prev.a, Params10.x);
+        }
+    }
+
+    col.rgb *= 1.0 + Params10.w * Params10.z * 0.25;
+    if (col.a <= 0.002)
+        discard;
+    return float4(col.rgb * col.a, col.a);
 }
 )";
 }

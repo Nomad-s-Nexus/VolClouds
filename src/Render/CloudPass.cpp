@@ -1,9 +1,8 @@
 #include "pch.h"
+#include "Render/CloudConfig.h"
 #include "Render/CloudPass.h"
 #include "Render/CloudShaders.h"
-
 #include <RE/Fallout.h>
-
 #if __has_include(<RE/C/Clouds.h>) && __has_include(<RE/B/BSSkyShaderProperty.h>)
 #define VOLCLOUDS_TYPED_SKY 1
 #else
@@ -15,25 +14,20 @@
 #include <RE/S/Sky.h>
 #include <RE/S/Sun.h>
 #include <RE/T/TESWeather.h>
-
 #ifdef MEM_RELEASE
 #undef MEM_RELEASE
 #endif
-
 #ifdef constant
 #undef constant
 #endif
-
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-
 #include <Windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
-
 // TODO-verify the hook slot and sky offsets at runtime before enabling by default.
 #include <algorithm>
 #include <chrono>
@@ -43,64 +37,33 @@
 #include <fstream>
 #include <mutex>
 #include <string>
-
 namespace RadClouds
 {
     namespace
     {
-        constexpr std::size_t kSetupGeometryVTableSlot = 7;
-        constexpr const char* kConfigPath = "Data/F4SE/Plugins/VolClouds/clouds.json";
-
-        struct Config
-        {
-            bool enabled{ false };
-            float density{ 1.6f };
-            float coverageScale{ 1.0f };
-            float layerBottom{ 3500.0f };
-            float layerTop{ 9000.0f };
-            int steps{ 24 };
-            float sunIntensity{ 2.5f };
-            float ambient{ 0.22f };
-            float windDrift{ 1.0f };
-            float maxDistance{ 60000.0f };
-            float blendAlpha{ 1.0f };
-            float noiseScale{ 1.0f };
-            int depthMode{ 0 };  // 0 = auto, 1 = standard Z (LESS_EQUAL), 2 = reversed Z (GREATER_EQUAL), 3 = no depth test
-            int debugMode{ 0 };
-            bool suppressVanillaClouds{ true };
-            float layer2Bottom{ 7000.0f };
-            float layer2Top{ 11000.0f };
-            float layer2Density{ 0.9f };
-            float layer2Coverage{ 0.45f };
-            float phaseG{ 0.65f };
-            float powder{ 0.65f };
-            float ambientBoost{ 1.4f };
-            float horizonFade{ 12000.0f };
-            float stormDarken{ 0.35f };
-            float cirrus{ 0.8f };  // 0 = normal, 1 = flat magenta (no depth test), 2 = normal colours without depth test
-        };
-
+        constexpr std::size_t kSetupGeometryVTableSlot = 7; using Config = CloudConfig;
         struct alignas(16) CloudCB
         {
-            DirectX::XMFLOAT4X4 invViewProj;
-            DirectX::XMFLOAT4 cameraPos;
+            DirectX::XMFLOAT4X4 invViewProj; DirectX::XMFLOAT4 cameraPos;
             DirectX::XMFLOAT4 sunDir;      // w = intensity
-            DirectX::XMFLOAT4 sunColor;
-            DirectX::XMFLOAT4 ambientColor;
+            DirectX::XMFLOAT4 sunColor; DirectX::XMFLOAT4 ambientColor;
             DirectX::XMFLOAT4 windAndTime; // x angle, y speed, z time, w coverage
             DirectX::XMFLOAT4 params0;     // x bottom, y top, z density, w steps
-            DirectX::XMFLOAT4 params1;
-            DirectX::XMFLOAT4 params2;
+            DirectX::XMFLOAT4 params1; DirectX::XMFLOAT4 params2;
             DirectX::XMFLOAT4 params3;
             DirectX::XMFLOAT4 params4;
             DirectX::XMFLOAT4 params5;
             DirectX::XMFLOAT4 params6;
+            DirectX::XMFLOAT4 params7;
+            DirectX::XMFLOAT4 params8;
+            DirectX::XMFLOAT4 params9;
+            DirectX::XMFLOAT4 params10;
         };
-
         struct FrameState
         {
             bool valid{ false };
             DirectX::XMFLOAT4X4 invViewProj{};
+            DirectX::XMFLOAT4X4 viewProj{};
             DirectX::XMFLOAT3 cameraPos{};
             DirectX::XMFLOAT3 sunDir{ 0.0f, 1.0f, 0.0f };
             float sunIntensity{ 1.0f };
@@ -166,68 +129,36 @@ namespace RadClouds
         ID3D11RasterizerState* g_raster{ nullptr };
         ID3D11ShaderResourceView* g_noiseSRV{ nullptr };
         ID3D11SamplerState* g_noiseSampler{ nullptr };
+        ID3D11SamplerState* g_clampSampler{ nullptr };
+        ID3D11BlendState* g_blendOpaque{ nullptr };
+        ID3D11PixelShader* g_compositePS{ nullptr };
+        ID3D11Texture2D* g_cloudTex[2]{};
+        ID3D11ShaderResourceView* g_cloudSRV[2]{};
+        ID3D11RenderTargetView* g_cloudRTV[2]{};
+        std::uint32_t g_cloudWidth{ 0 };
+        std::uint32_t g_cloudHeight{ 0 };
+        int g_cloudIndex{ 0 };
+        bool g_hasPrevCloud{ false };
+        DirectX::XMFLOAT4 g_prevRows[3]{};
         std::shared_ptr<spdlog::logger> Logger()
         {
             return spdlog::get("VolClouds");
         }
         void LoadConfigLocked()
         {
-            Config cfg{};
-            std::error_code ec;
-            if (!std::filesystem::exists(kConfigPath, ec))
+            CloudConfig cfg{};
+            const bool loaded = LoadCloudConfig(kCloudConfigPath, cfg);
             {
+                std::scoped_lock lock(g_mutex);
                 g_config = cfg;
-                if (auto logger = Logger())
-                    logger->info("[Clouds] No config at '{}'; volumetric clouds disabled until enabled in that file.", kConfigPath);
-                return;
             }
-            try
-            {
-                std::ifstream file(kConfigPath);
-                if (!file.is_open())
-                    throw std::runtime_error("open failed");
-                const json data = json::parse(file);
-                auto read = [&data](const char* key, auto& out) {
-                    if (auto it = data.find(key); it != data.end())
-                        out = it->get<std::decay_t<decltype(out)>>();
-                };
-                read("bEnabled", cfg.enabled);
-                read("fDensity", cfg.density);
-                read("fCoverageScale", cfg.coverageScale);
-                read("fLayerBottom", cfg.layerBottom);
-                read("fLayerTop", cfg.layerTop);
-                read("iSteps", cfg.steps);
-                read("fSunIntensity", cfg.sunIntensity);
-                read("fAmbient", cfg.ambient);
-                read("fWindDrift", cfg.windDrift);
-                read("fMaxDistance", cfg.maxDistance);
-                read("fBlendAlpha", cfg.blendAlpha);
-                read("fNoiseScale", cfg.noiseScale);
-                read("iDepthMode", cfg.depthMode);
-                read("iDebugMode", cfg.debugMode);
-                read("bSuppressVanillaClouds", cfg.suppressVanillaClouds);
-                read("fLayer2Bottom", cfg.layer2Bottom);
-                read("fLayer2Top", cfg.layer2Top);
-                read("fLayer2Density", cfg.layer2Density);
-                read("fLayer2Coverage", cfg.layer2Coverage);
-                read("fPhase", cfg.phaseG);
-                read("fPowder", cfg.powder);
-                read("fAmbientBoost", cfg.ambientBoost);
-                read("fHorizonFade", cfg.horizonFade);
-                read("fStormDarken", cfg.stormDarken);
-                read("fCirrus", cfg.cirrus);
-                cfg.steps = std::clamp(cfg.steps, 4, 64);
-                cfg.layerTop = std::max(cfg.layerTop, cfg.layerBottom + 100.0f);
-                g_config = cfg;
-                if (auto logger = Logger())
-                    logger->info("[Clouds] Config loaded: enabled={} density={} steps={} layer=[{}, {}] depthMode={}",
+            if (auto logger = Logger()) {
+                if (!loaded) {
+                    logger->info("[Clouds] No config at '{}'; volumetric clouds disabled until enabled in that file.", kCloudConfigPath);
+                } else {
+                    logger->info("[Clouds] Config loaded: enabled={} density={:.2f} steps={} layer=[{:.0f}, {:.0f}] depthMode={}",
                         cfg.enabled, cfg.density, cfg.steps, cfg.layerBottom, cfg.layerTop, cfg.depthMode);
-            }
-            catch (const std::exception& ex)
-            {
-                g_config = Config{};
-                if (auto logger = Logger())
-                    logger->error("[Clouds] Config '{}' failed to parse ({}); clouds disabled.", kConfigPath, ex.what());
+                }
             }
         }
         void ReleaseResources()
@@ -246,6 +177,17 @@ namespace RadClouds
             release(g_cb);
             release(g_noiseSRV);
             release(g_noiseSampler);
+            release(g_clampSampler);
+            release(g_compositePS);
+            release(g_blendOpaque);
+            for (int i = 0; i < 2; ++i) {
+                release(g_cloudTex[i]);
+                release(g_cloudSRV[i]);
+                release(g_cloudRTV[i]);
+            }
+            g_cloudWidth = 0;
+            g_cloudHeight = 0;
+            g_hasPrevCloud = false;
             release(g_ps);
             release(g_vs);
             g_device = nullptr;
@@ -259,7 +201,6 @@ namespace RadClouds
                 return SUCCEEDED(D3DCompile(src, std::strlen(src), nullptr, nullptr, nullptr,
                     "main", target, D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, out, &err));
             };
-
             bool ok = compile(Shaders::kFullscreenVS, "vs_5_0", &vsBlob);
             if (ok && err) { err->Release(); err = nullptr; }
             ok = ok && compile(Shaders::kCloudPS, "ps_5_0", &psBlob);
@@ -283,7 +224,32 @@ namespace RadClouds
             if (err) { err->Release(); err = nullptr; }
             vsBlob->Release();
             psBlob->Release();
-
+            ID3DBlob* compBlob = nullptr;
+            ID3DBlob* compErr = nullptr;
+            if (FAILED(D3DCompile(Shaders::kCompositePS, std::strlen(Shaders::kCompositePS), nullptr, nullptr, nullptr,
+                    "main", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &compBlob, &compErr)) || !compBlob) {
+                if (auto logger = Logger())
+                    logger->error("[Clouds] Composite shader compile failed: {}",
+                        compErr ? static_cast<const char*>(compErr->GetBufferPointer()) : "unknown");
+                if (compErr) compErr->Release();
+                if (compBlob) compBlob->Release();
+                return false;
+            }
+            if (compErr) compErr->Release();
+            const bool compOk = SUCCEEDED(device->CreatePixelShader(compBlob->GetBufferPointer(), compBlob->GetBufferSize(), nullptr, &g_compositePS));
+            compBlob->Release();
+            if (!compOk) return false;
+            D3D11_BLEND_DESC opaqueDesc{};
+            opaqueDesc.RenderTarget[0].BlendEnable = FALSE;
+            opaqueDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+            if (FAILED(device->CreateBlendState(&opaqueDesc, &g_blendOpaque))) return false;
+            D3D11_SAMPLER_DESC clampDesc{};
+            clampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+            clampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+            clampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+            clampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+            clampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+            if (FAILED(device->CreateSamplerState(&clampDesc, &g_clampSampler))) return false;
             D3D11_BUFFER_DESC cbDesc{};
             cbDesc.ByteWidth = sizeof(CloudCB);
             cbDesc.Usage = D3D11_USAGE_DYNAMIC;
@@ -293,7 +259,6 @@ namespace RadClouds
                 if (auto logger = Logger()) logger->error("[Clouds] Constant buffer creation failed.");
                 return false;
             }
-
             D3D11_BLEND_DESC blendDesc{};
             blendDesc.RenderTarget[0].BlendEnable = TRUE;
             blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
@@ -304,7 +269,6 @@ namespace RadClouds
             blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
             blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
             if (FAILED(device->CreateBlendState(&blendDesc, &g_blend))) return false;
-
             D3D11_DEPTH_STENCIL_DESC ds{};
             ds.DepthEnable = TRUE;
             ds.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
@@ -315,17 +279,14 @@ namespace RadClouds
             if (FAILED(device->CreateDepthStencilState(&ds, &g_depthReversed))) return false;
             ds.DepthEnable = FALSE;
             if (FAILED(device->CreateDepthStencilState(&ds, &g_depthNone))) return false;
-
             D3D11_RASTERIZER_DESC rs{};
             rs.FillMode = D3D11_FILL_SOLID;
             rs.CullMode = D3D11_CULL_NONE;
             rs.DepthClipEnable = FALSE;
             rs.ScissorEnable = FALSE;
             if (FAILED(device->CreateRasterizerState(&rs, &g_raster))) return false;
-
             return true;
         }
-
         bool LoadNoiseVolume(ID3D11Device* device)
         {
             constexpr const char* path = "Data/F4SE/Plugins/VolClouds/cloudnoise.dds";
@@ -358,7 +319,34 @@ namespace RadClouds
             if (auto logger = Logger()) logger->info("[Clouds] Noise volume loaded {}x{}x{}.", width, height, depth);
             return true;
         }
-
+        bool EnsureCloudTextures(ID3D11Device* device, std::uint32_t width, std::uint32_t height)
+        {
+            if (width == 0 || height == 0) return false;
+            if (g_cloudWidth == width && g_cloudHeight == height && g_cloudTex[0]) return true;
+            for (int i = 0; i < 2; ++i) {
+                if (g_cloudTex[i]) { g_cloudTex[i]->Release(); g_cloudTex[i] = nullptr; }
+                if (g_cloudSRV[i]) { g_cloudSRV[i]->Release(); g_cloudSRV[i] = nullptr; }
+                if (g_cloudRTV[i]) { g_cloudRTV[i]->Release(); g_cloudRTV[i] = nullptr; }
+            }
+            g_cloudWidth = width;
+            g_cloudHeight = height;
+            g_hasPrevCloud = false;
+            D3D11_TEXTURE2D_DESC desc{};
+            desc.Width = width;
+            desc.Height = height;
+            desc.MipLevels = 1;
+            desc.ArraySize = 1;
+            desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            desc.SampleDesc.Count = 1;
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+            for (int i = 0; i < 2; ++i) {
+                if (device->CreateTexture2D(&desc, nullptr, &g_cloudTex[i]) < 0) return false;
+                if (device->CreateShaderResourceView(g_cloudTex[i], nullptr, &g_cloudSRV[i]) < 0) return false;
+                if (device->CreateRenderTargetView(g_cloudTex[i], nullptr, &g_cloudRTV[i]) < 0) return false;
+            }
+            return true;
+        }
         bool EnsureDeviceResources()
         {
             auto* data = RE::BSGraphics::GetRendererData();
@@ -368,7 +356,6 @@ namespace RadClouds
             if (!rawDevice || !rawContext) return false;
             if (g_failedDevice == rawDevice) return false;
             if (g_device == reinterpret_cast<ID3D11Device*>(rawDevice) && g_vs && g_ps) return true;
-
             ReleaseResources();
             g_device = reinterpret_cast<ID3D11Device*>(rawDevice);
             if (!CompileShaders(g_device)) {
@@ -381,12 +368,10 @@ namespace RadClouds
                 logger->info("[Clouds] D3D11 resources created for device {:p}.", static_cast<void*>(g_device));
             return true;
         }
-
         std::uint32_t SkyModeRaw(const RE::Sky* sky)
         {
             return *reinterpret_cast<const std::uint32_t*>(reinterpret_cast<const char*>(sky) + 0x36C);
         }
-
         float WeatherCoverage(const RE::TESWeather* weather)
         {
             if (!weather) return 0.0f;
@@ -403,12 +388,10 @@ namespace RadClouds
             if (flags & 0x8) coverage = std::max(coverage, 0.70f);  // snow
             return std::clamp(coverage, 0.0f, 1.0f);
         }
-
         FrameState GatherFrameState(const RE::BSGraphics::State* graphicsState, const RE::Sky* sky, const Config& cfg)
         {
             FrameState out{};
             if (!graphicsState || !sky) return out;
-
             const RE::BSGraphics::ViewData* candidates[3]{};
             const RE::NiPoint3* adjusts[3]{};
             const char* names[3]{};
@@ -427,7 +410,6 @@ namespace RadClouds
                 adjusts[2] = &last.posAdjust;
                 names[2] = "cameraDataCache::back";
             }
-
             const auto finite4 = [](const DirectX::XMFLOAT4& v) {
                 return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) && std::isfinite(v.w);
             };
@@ -436,7 +418,6 @@ namespace RadClouds
                     if (!finite4({ m.m[r][0], m.m[r][1], m.m[r][2], m.m[r][3] })) return false;
                 return true;
             };
-
             for (int i = 0; i < 3 && !out.hadMatrix; ++i) {
                 if (!candidates[i]) continue;
                 DirectX::XMFLOAT4X4 vpRaw{};
@@ -444,7 +425,6 @@ namespace RadClouds
                 if (!finiteMatrix(vpRaw)) continue;
                 const float row0 = std::abs(vpRaw._11) + std::abs(vpRaw._12) + std::abs(vpRaw._13) + std::abs(vpRaw._14);
                 if (row0 < 1e-6f) continue;
-
                 DirectX::XMVECTOR det = DirectX::XMVectorZero();
                 const DirectX::XMMATRIX invVp = DirectX::XMMatrixInverse(&det, DirectX::XMLoadFloat4x4(&vpRaw));
                 DirectX::XMFLOAT4X4 invVpF{};
@@ -452,7 +432,6 @@ namespace RadClouds
                 if (!finiteMatrix(invVpF)) continue;
                 const float detScalar = DirectX::XMVectorGetX(det);
                 if (!std::isfinite(detScalar)) continue;
-
                 DirectX::XMFLOAT4X4 viewRaw{};
                 std::memcpy(&viewRaw, &candidates[i]->viewMat, sizeof(viewRaw));
                 if (!finiteMatrix(viewRaw)) continue;
@@ -460,13 +439,13 @@ namespace RadClouds
                 DirectX::XMFLOAT4X4 invViewF{};
                 DirectX::XMStoreFloat4x4(&invViewF, invView);
                 if (!finiteMatrix(invViewF)) continue;
-
                 DirectX::XMFLOAT4X4 projRaw{};
                 std::memcpy(&projRaw, &candidates[i]->projMat, sizeof(projRaw));
                 out.reversedDepth = finiteMatrix(projRaw) && projRaw._33 <= 0.0f;
                 out.nearZ = out.reversedDepth ? 1.0f : 0.0f;
                 out.farZ = out.reversedDepth ? 0.0f : 1.0f;
                 out.invViewProj = invVpF;
+                out.viewProj = vpRaw;
                 const auto& pa = *adjusts[i];
                 out.posAdjust = { pa.x, pa.y, pa.z };
                 out.cameraPos = { invViewF._41 + pa.x, invViewF._42 + pa.y, invViewF._43 + pa.z };
@@ -482,7 +461,6 @@ namespace RadClouds
                 out.matrixSample[2] = vpRaw._13; out.matrixSample[3] = vpRaw._14;
                 return out;
             }
-
             if (sky->sun && sky->sun->light)
             {
                 // TODO-verify light axis convention; force above-horizon like the engine does.
@@ -505,7 +483,6 @@ namespace RadClouds
                 const float len = std::sqrt(out.sunDir.x * out.sunDir.x + out.sunDir.y * out.sunDir.y + 0.1225f);
                 out.sunDir = { out.sunDir.x / len, out.sunDir.y / len, 0.35f / len };
             }
-
             const float dayBase = std::clamp(out.sunDir.z * 1.6f + 0.25f, 0.05f, 1.0f);
             out.sunDir.z = std::max(out.sunDir.z, 0.15f);
             const RE::NiColor sunTint = sky->skyColor[4];  // ColorType::kSunlight
@@ -515,12 +492,27 @@ namespace RadClouds
             out.sunIntensity = cfg.sunIntensity * dayBase;
             const float ambientScale = 0.9f + cfg.ambient * 2.0f;
             out.ambientColor = { std::max(skyUpper.r, 0.05f) * ambientScale, std::max(skyUpper.g, 0.06f) * ambientScale, std::max(skyUpper.b, 0.08f) * ambientScale };
-
             const float pct = std::clamp(sky->currentWeatherPct, 0.0f, 1.0f);
             const float currentCoverage = WeatherCoverage(sky->currentWeather);
             const float lastCoverage = sky->lastWeather ? WeatherCoverage(sky->lastWeather) : currentCoverage;
             out.coverage = std::clamp((lastCoverage + (currentCoverage - lastCoverage) * pct) * cfg.coverageScale, 0.0f, 0.92f);
-
+            const bool isStorm = out.stormFactor > 0.5f;
+            const bool isCloudy = !isStorm && out.coverage > 0.45f;
+            if (isStorm) {
+                out.coverage = std::clamp(out.coverage + cfg.stormCoverageBoost, 0.0f, 0.95f);
+                out.windSpeed *= 1.4f;
+            } else if (!isCloudy) {
+                out.coverage *= cfg.clearCoverageScale;
+            }
+            const float sunElevation01 = std::clamp(out.sunDir.z, 0.0f, 1.0f);
+            const float sunset = 1.0f - std::clamp(sunElevation01 / 0.35f, 0.0f, 1.0f);
+            if (sunset > 0.0f) {
+                const float warmth = sunset * cfg.sunsetWarmth;
+                out.sunColor.x *= 1.0f + warmth;
+                out.sunColor.z *= 1.0f - warmth * 0.35f;
+                out.ambientColor.x *= 1.0f + warmth * 0.4f;
+                out.ambientColor.z *= 1.0f - warmth * 0.15f;
+            }
             out.windAngle = sky->windAngle;
             out.windSpeed = sky->windSpeed * cfg.windDrift;
             out.flash = std::clamp(sky->flash, 0.0f, 1.0f);
@@ -532,7 +524,6 @@ namespace RadClouds
             out.valid = true;
             return out;
         }
-
         struct CachedShaderState
         {
             ID3D11VertexShader* vs{};
@@ -561,7 +552,6 @@ namespace RadClouds
             ID3D11Buffer* vsCbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT]{};
             ID3D11Buffer* psCbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT]{};
         };
-
         class DrawScope
         {
         public:
@@ -587,7 +577,6 @@ namespace RadClouds
                 ctx_->VSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, s_.vsCbs);
                 ctx_->PSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, s_.psCbs);
             }
-
             ~DrawScope()
             {
                 if (!ctx_) return;
@@ -609,10 +598,8 @@ namespace RadClouds
                 ctx_->PSSetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, s_.psCbs);
                 ReleaseAll();
             }
-
             DrawScope(const DrawScope&) = delete;
             DrawScope& operator=(const DrawScope&) = delete;
-
         private:
             void ReleaseAll()
             {
@@ -623,11 +610,9 @@ namespace RadClouds
                 for (auto*& p : s_.vsCbs) release(p);
                 for (auto*& p : s_.psCbs) release(p);
             }
-
             ID3D11DeviceContext* ctx_{};
             CachedShaderState s_{};
         };
-
         struct TargetInfo
         {
             std::uint32_t format{ 0 };
@@ -637,7 +622,6 @@ namespace RadClouds
             std::uint32_t samples{ 0 };
             void* textureId{ nullptr };
         };
-
         bool IsMainSceneTarget(ID3D11DeviceContext* ctx, std::uint32_t expectedWidth, std::uint32_t expectedHeight, TargetInfo* outInfo)
         {
             ID3D11RenderTargetView* rtv = nullptr;
@@ -667,13 +651,11 @@ namespace RadClouds
             };
             return NearSize(desc.Width, expectedWidth) && NearSize(desc.Height, expectedHeight);
         }
-
-        void RenderClouds(ID3D11DeviceContext* ctx, const FrameState& frame, const Config& cfg)
+        void RenderClouds(ID3D11DeviceContext* ctx, const FrameState& frame, const Config& cfg, const TargetInfo& target)
         {
             if (!g_vs || !g_ps || !g_cb) return;
             if (!EnsureDeviceResources()) return;
             if (!ctx || !g_vs || !g_ps || !g_cb) return;
-
             ID3D11RenderTargetView* rtv = nullptr;
             ID3D11DepthStencilView* dsv = nullptr;
             ctx->OMGetRenderTargets(1, &rtv, &dsv);
@@ -682,7 +664,6 @@ namespace RadClouds
                 return;
             }
             rtv->Release();
-
             CloudCB cb{};
             cb.invViewProj = frame.invViewProj;
             cb.cameraPos = { frame.cameraPos.x, frame.cameraPos.y, frame.cameraPos.z, 0.0f };
@@ -697,7 +678,10 @@ namespace RadClouds
             cb.params4 = { cfg.phaseG, cfg.powder, cfg.ambientBoost, cfg.horizonFade };
             cb.params5 = { frame.stormFactor * cfg.stormDarken, frame.stormFactor, cfg.cirrus, frame.coverage };
             cb.params6 = { g_noiseSRV ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
-
+            cb.params7 = g_hasPrevCloud ? g_prevRows[0] : DirectX::XMFLOAT4{ 0, 0, 0, 0 };
+            cb.params8 = g_hasPrevCloud ? g_prevRows[1] : DirectX::XMFLOAT4{ 0, 0, 0, 0 };
+            cb.params9 = g_hasPrevCloud ? g_prevRows[2] : DirectX::XMFLOAT4{ 0, 0, 0, 0 };
+            cb.params10 = { g_hasPrevCloud ? cfg.temporalBlend : 0.0f, 1.0f, cfg.fogCoupling, cfg.sunShafts };
             const D3D11_MAPPED_SUBRESOURCE mapped = [&]() {
                 D3D11_MAPPED_SUBRESOURCE m{};
                 ctx->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m);
@@ -707,9 +691,13 @@ namespace RadClouds
                 std::memcpy(mapped.pData, &cb, sizeof(cb));
                 ctx->Unmap(g_cb, 0);
             }
-
             DrawScope scope(ctx);
-
+            const std::uint32_t fullWidth = target.width ? target.width : 1920u;
+            const std::uint32_t fullHeight = target.height ? target.height : 1080u;
+            const float scale = std::clamp(cfg.renderScale, 0.25f, 1.0f);
+            const std::uint32_t halfWidth = std::max(1u, static_cast<std::uint32_t>(fullWidth * scale));
+            const std::uint32_t halfHeight = std::max(1u, static_cast<std::uint32_t>(fullHeight * scale));
+            if (!EnsureCloudTextures(g_device, halfWidth, halfHeight)) return;
             const bool useDepth = dsv != nullptr;
             if (dsv) dsv->Release();
             const bool reversed = cfg.depthMode == 2 || (cfg.depthMode == 0 && frame.reversedDepth);
@@ -719,24 +707,61 @@ namespace RadClouds
                 g_loggedNoDepth = true;
                 if (auto logger = Logger()) logger->warn("[Clouds] No depth bound at sky pass; drawing without depth test.");
             }
-
+            const int current = g_cloudIndex;
+            const int previous = 1 - current;
+            ID3D11RenderTargetView* mainRTV = nullptr;
+            ID3D11DepthStencilView* mainDSV = nullptr;
+            ctx->OMGetRenderTargets(1, &mainRTV, &mainDSV);
+            if (!mainRTV) {
+                if (mainDSV) mainDSV->Release();
+                return;
+            }
+            D3D11_VIEWPORT savedViewport{};
+            UINT viewportCount = 1;
+            ctx->RSGetViewports(&viewportCount, &savedViewport);
             ctx->IASetInputLayout(nullptr);
             ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             ctx->VSSetShader(g_vs, nullptr, 0);
-            ctx->PSSetShader(g_ps, nullptr, 0);
             ctx->GSSetShader(nullptr, nullptr, 0);
             ctx->HSSetShader(nullptr, nullptr, 0);
             ctx->DSSetShader(nullptr, nullptr, 0);
             ctx->VSSetConstantBuffers(0, 1, &g_cb);
             ctx->PSSetConstantBuffers(0, 1, &g_cb);
-            ctx->PSSetShaderResources(0, 1, &g_noiseSRV);
-            ctx->PSSetSamplers(0, 1, &g_noiseSampler);
+            {
+                D3D11_VIEWPORT halfViewport{ 0.0f, 0.0f, static_cast<float>(halfWidth), static_cast<float>(halfHeight), 0.0f, 1.0f };
+                ctx->RSSetViewports(1, &halfViewport);
+                ctx->OMSetRenderTargets(1, &g_cloudRTV[current], nullptr);
+                const float clear[4]{ 0.0f, 0.0f, 0.0f, 0.0f };
+                ctx->ClearRenderTargetView(g_cloudRTV[current], clear);
+                ctx->PSSetShader(g_ps, nullptr, 0);
+                ctx->PSSetShaderResources(0, 1, &g_noiseSRV);
+                ctx->PSSetSamplers(0, 1, &g_noiseSampler);
+                ctx->OMSetBlendState(g_blendOpaque, nullptr, 0xFFFFFFFF);
+                ctx->OMSetDepthStencilState(g_depthNone, 0);
+                ctx->RSSetState(g_raster);
+                ctx->Draw(3, 0);
+            }
+            ctx->RSSetViewports(1, &savedViewport);
+            ctx->OMSetRenderTargets(1, &mainRTV, mainDSV);
+            ID3D11ShaderResourceView* compositeSRVs[2]{ g_cloudSRV[current], g_cloudSRV[previous] };
+            ctx->PSSetShader(g_compositePS, nullptr, 0);
+            ctx->PSSetShaderResources(0, 2, compositeSRVs);
+            ctx->PSSetSamplers(0, 1, &g_clampSampler);
             ctx->OMSetBlendState(g_blend, nullptr, 0xFFFFFFFF);
             ctx->OMSetDepthStencilState(depthState, 0);
             ctx->RSSetState(g_raster);
             ctx->Draw(3, 0);
+            ID3D11ShaderResourceView* noSRVs[2]{ nullptr, nullptr };
+            ctx->PSSetShaderResources(0, 2, noSRVs);
+            if (mainDSV) mainDSV->Release();
+            mainRTV->Release();
+            g_prevRows[0] = { frame.viewProj._11, frame.viewProj._12, frame.viewProj._13, frame.viewProj._14 };
+            g_prevRows[1] = { frame.viewProj._21, frame.viewProj._22, frame.viewProj._23, frame.viewProj._24 };
+            g_prevRows[2] = { frame.viewProj._31, frame.viewProj._32, frame.viewProj._33, frame.viewProj._34 };
+            g_hasPrevCloud = true;
+            g_cloudIndex = previous;
+            ctx->Draw(3, 0);
         }
-
         struct CloudPassInfo
         {
             bool hasProperty{ false };
@@ -744,7 +769,6 @@ namespace RadClouds
             std::uint32_t layer{ 0 };
             std::uint32_t numLayers{ 0 };
         };
-
         bool IsCloudPass(void* a_pass, const RE::Sky* sky, CloudPassInfo* outInfo)
         {
             if (!a_pass) return false;
@@ -769,14 +793,12 @@ namespace RadClouds
             return skyObjectType == 3;
 #endif
         }
-
         void* SkyPropertyOfPass(void* a_pass)
         {
             if (!a_pass) return nullptr;
             // TODO-verify BSRenderPass::pShaderProperty offset while no BSRenderPass header exists.
             return *reinterpret_cast<void**>(reinterpret_cast<char*>(a_pass) + 0x10);
         }
-
         void PollHotkeys()
         {
             const bool debugDown = (::GetAsyncKeyState(VK_F10) & 0x8000) != 0;
@@ -793,7 +815,6 @@ namespace RadClouds
             g_hotkeyDebugDown = debugDown;
             g_hotkeySuppressDown = suppressDown;
         }
-
         void Hook_SetupGeometry(void* a_shader, void* a_pass)
         {
             Config cfg;
@@ -804,7 +825,6 @@ namespace RadClouds
             PollHotkeys();
             const int debugMode = g_debugOverride >= 0 ? g_debugOverride : cfg.debugMode;
             const bool suppressVanilla = g_suppressOverride >= 0 ? (g_suppressOverride == 1) : cfg.suppressVanillaClouds;
-
             if (cfg.enabled && suppressVanilla) {
                 if (void* property = SkyPropertyOfPass(a_pass)) {
 #if VOLCLOUDS_TYPED_SKY
@@ -817,17 +837,14 @@ namespace RadClouds
 #endif
                 }
             }
-
             if (g_original)
                 g_original(a_shader, a_pass);
-
             const auto callIndex = ++g_hookCalls;
             auto logger = Logger();
             if (!g_firstHookLogged) {
                 g_firstHookLogged = true;
                 if (logger) logger->info("[Clouds] SetupGeometry hook fired (first call).");
             }
-
             if (!cfg.enabled) {
                 ++g_skipDisabled;
                 if (!g_disabledLogged) {
@@ -836,13 +853,10 @@ namespace RadClouds
                 }
                 return;
             }
-
             auto* graphicsState = RE::BSGraphics::State::GetSingleton();
             auto* sky = RE::Sky::GetSingleton();
             if (!graphicsState || !sky) return;
-
             const auto frame = graphicsState->frameID;
-
             const auto mode = SkyModeRaw(sky);
             if (mode != 2 && mode != 3) {
                 ++g_skipMode;
@@ -852,18 +866,15 @@ namespace RadClouds
                 }
                 return;
             }
-
             CloudPassInfo passInfo{};
             const bool isCloudPass = IsCloudPass(a_pass, sky, &passInfo);
             if (passInfo.hasProperty && passInfo.skyObjectType >= 0 && passInfo.skyObjectType < 16)
                 ++g_skyTypeCounts[passInfo.skyObjectType];
-
             if (isCloudPass && !g_firstCloudPassLogged) {
                 g_firstCloudPassLogged = true;
                 if (logger) logger->info("[Clouds] First cloud pass: layer={} numLayers={} techniqueAccepted=true.",
                     passInfo.layer, passInfo.numLayers);
             }
-
             if (!isCloudPass) {
                 ++g_skipPass;
                 if (!g_passLogged) {
@@ -884,7 +895,6 @@ namespace RadClouds
                     if (logger) logger->info("[Clouds] Fallback pass in use (skyObjectType={}).", passInfo.skyObjectType);
                 }
             }
-
             if (!g_vs || !g_ps || !g_cb) {
                 if (!EnsureDeviceResources()) {
                     ++g_skipDevice;
@@ -909,9 +919,7 @@ namespace RadClouds
                 }
                 return;
             }
-
             if (frame == g_lastFrame && target.textureId == g_lastTarget) return;
-
             const FrameState state = GatherFrameState(graphicsState, sky, cfg);
             if (!state.valid) {
                 ++g_skipGather;
@@ -922,9 +930,8 @@ namespace RadClouds
                 }
                 return;
             }
-
             cfg.debugMode = debugMode;
-            RenderClouds(ctx, state, cfg);
+            RenderClouds(ctx, state, cfg, target);
             ++g_draws;
             g_lastFrame = frame;
             g_lastTarget = target.textureId;
@@ -943,14 +950,11 @@ namespace RadClouds
             }
         }
     }
-
     bool Install()
     {
         std::scoped_lock lock(g_mutex);
         if (g_installed) return true;
-
         LoadConfigLocked();
-
         try
         {
             // TODO-verify the AE vtable slot index before enabling there.
@@ -972,7 +976,7 @@ namespace RadClouds
             if (auto logger = Logger()) {
                 logger->info("[Clouds] BSSkyShader::SetupGeometry hook installed (vtable slot {}); vtable base 0x{:X} (alt vtable 0x{:X}).",
                     kSetupGeometryVTableSlot, vtable.get(), altVtable);
-                logger->info("[Clouds] Config enabled={} (file '{}').", g_config.enabled, kConfigPath);
+                logger->info("[Clouds] Config enabled={} (file '{}').", g_config.enabled, kCloudConfigPath);
             }
         }
         catch (const std::exception& ex)
@@ -983,13 +987,11 @@ namespace RadClouds
         }
         return g_installed;
     }
-
     void ReloadConfig()
     {
         std::scoped_lock lock(g_mutex);
         LoadConfigLocked();
     }
-
     bool IsEnabled()
     {
         return g_installed && g_config.enabled;

@@ -4,12 +4,20 @@
   "fCoverageScale": 1.0,
   "fLayerBottom": 3500.0,
   "fLayerTop": 9000.0,
-  "iSteps": 24,
+  "iSteps": 48,
   "fSunIntensity": 2.5,
   "fAmbient": 0.22,
   "fWindDrift": 1.0,
   "fMaxDistance": 60000.0,
   "fBlendAlpha": 1.0,
   "fNoiseScale": 1.0,
-  "iDepthMode": 0
+  "iDepthMode": 0,
+  "fRenderScale": 0.5,
+  "fTemporalBlend": 0.2,
+  "fFogCoupling": 1.0,
+  "fSunShafts": 1.0,
+  "fStormDensityBoost": 1.5,
+  "fStormCoverageBoost": 0.1,
+  "fClearCoverageScale": 0.55,
+  "fSunsetWarmth": 0.35
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.2 - horizon fade and deployed config units
+
+- In-game run showed TMR still loading the pre-unit-change `clouds.json` (layer 3500-9000, density 3.0,
+  maxDistance 400000, horizonFade 20000, epsilon 0.01) even though the repo defaults had been updated;
+  the file was deployed and the log now prints the new effective values.
+- `fHorizonFade` default is now 400000 units (about 5.7 km). At the old 12000 units (about 171 m) the
+  horizon term `exp(-t0 / horizonFade)` with `t0 >= 240000` units evaluated to about e-20, i.e. it faded
+  the whole deck out before it started. This is the first in-game/offline mismatch found by launching:
+  the offline harness had been using a units-correct fade.
+
 ## v0.7.1 - unprojection guard
 
 - Fixed a fatal ray-setup bug found with a headless D3D11 render of `kCloudPS`: far-plane unprojection has

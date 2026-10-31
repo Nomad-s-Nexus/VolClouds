@@ -31,7 +31,7 @@
   "fPhase": 0.65,
   "fPowder": 0.65,
   "fAmbientBoost": 1.4,
-  "fHorizonFade": 12000.0,
+  "fHorizonFade": 400000.0,
   "fStormDarken": 0.35,
   "fCirrus": 0.8,
   "fCloudShadowStrength": 0.45,

@@ -43,7 +43,7 @@ namespace RadClouds
         float phaseG{ 0.65f };
         float powder{ 0.65f };
         float ambientBoost{ 1.4f };
-        float horizonFade{ 12000.0f };
+        float horizonFade{ 400000.0f };
         float stormDarken{ 0.35f };
         float cirrus{ 0.8f };
     };

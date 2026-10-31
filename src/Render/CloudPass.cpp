@@ -441,19 +441,51 @@ namespace RadClouds
             if (res == g_depthSRVRes && g_depthSRV) { res->Release(); return g_depthSRV; }
             if (g_depthSRV) { g_depthSRV->Release(); g_depthSRV = nullptr; }
             if (g_depthSRVRes) { g_depthSRVRes->Release(); g_depthSRVRes = nullptr; }
+            ID3D11Texture2D* tex = nullptr;
+            res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex));
+            D3D11_TEXTURE2D_DESC desc{};
+            if (tex) { tex->GetDesc(&desc); tex->Release(); }
+            DXGI_FORMAT srvFormat = DXGI_FORMAT_UNKNOWN;
+            switch (desc.Format) {
+            case DXGI_FORMAT_R32_TYPELESS:
+            case DXGI_FORMAT_R32_FLOAT:
+                srvFormat = DXGI_FORMAT_R32_FLOAT;
+                break;
+            case DXGI_FORMAT_R24G8_TYPELESS:
+                srvFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+                break;
+            case DXGI_FORMAT_R16_TYPELESS:
+                srvFormat = DXGI_FORMAT_R16_UNORM;
+                break;
+            case DXGI_FORMAT_R32G8X24_TYPELESS:
+                srvFormat = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+                break;
+            default:
+                break;
+            }
+            if (srvFormat == DXGI_FORMAT_UNKNOWN) {
+                res->Release();
+                if (!g_loggedShadowNoDepth && Logger()) {
+                    g_loggedShadowNoDepth = true;
+                    Logger()->warn("[Clouds] Scene depth format {} has no sampleable SRV; depth-based effects disabled.", static_cast<int>(desc.Format));
+                }
+                return nullptr;
+            }
             D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
-            srv.Format = DXGI_FORMAT_R32_FLOAT;
+            srv.Format = srvFormat;
             srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
             srv.Texture2D.MipLevels = 1;
             if (g_device->CreateShaderResourceView(res, &srv, &g_depthSRV) < 0) {
                 g_depthSRV = nullptr;
+                res->Release();
                 if (!g_loggedShadowNoDepth && Logger()) {
                     g_loggedShadowNoDepth = true;
-                    Logger()->warn("[Clouds] Scene depth SRV unavailable; cloud shadows on terrain disabled.");
+                    Logger()->warn("[Clouds] Scene depth SRV creation failed (texture format {}, SRV format {}).", static_cast<int>(desc.Format), static_cast<int>(srvFormat));
                 }
-                res->Release();
                 return nullptr;
             }
+            if (Logger())
+                Logger()->info("[Clouds] Scene depth SRV created: texture format {} -> SRV format {}, {}x{}.", static_cast<int>(desc.Format), static_cast<int>(srvFormat), desc.Width, desc.Height);
             g_depthSRVRes = res;
             return g_depthSRV;
         }
@@ -884,13 +916,25 @@ namespace RadClouds
             ctx->RSSetViewports(1, &savedViewport);
             ctx->OMSetRenderTargets(1, &mainRTV, mainDSV);
             ID3D11ShaderResourceView* compositeSRVs[2]{ g_cloudSRV[current], g_cloudSRV[previous] };
+            ID3D11ShaderResourceView* compositeDepth = DepthSRVFrom(ctx, mainDSV);
+            if (!compositeDepth) {
+                D3D11_MAPPED_SUBRESOURCE patch{};
+                if (ctx->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &patch) >= 0) {
+                    cb.params12.y = 0.0f;
+                    std::memcpy(patch.pData, &cb, sizeof(cb));
+                    ctx->Unmap(g_cb, 0);
+                }
+            }
             ctx->PSSetShader(g_compositePS, nullptr, 0);
             ctx->PSSetShaderResources(0, 2, compositeSRVs);
+            ctx->PSSetShaderResources(4, 1, &compositeDepth);
             ctx->PSSetSamplers(0, 1, &g_clampSampler);
             ctx->OMSetBlendState(g_blend, nullptr, 0xFFFFFFFF);
-            ctx->OMSetDepthStencilState(depthState, 0);
+            ctx->OMSetDepthStencilState(compositeDepth ? g_depthNone : depthState, 0);
             ctx->RSSetState(g_raster);
             ctx->Draw(3, 0);
+            ID3D11ShaderResourceView* noDepthSRV = nullptr;
+            ctx->PSSetShaderResources(4, 1, &noDepthSRV);
             if (cfg.cloudShadows && g_shadowReady) {
                 ID3D11ShaderResourceView* depthSRV = DepthSRVFrom(ctx, mainDSV);
                 if (depthSRV && g_shadowMaskSRV) {

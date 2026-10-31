@@ -93,6 +93,11 @@ namespace RadClouds
         bool g_loggedTargetSkip{ false };
         std::uint32_t g_lastFrame{ 0xFFFFFFFFu };
         std::uint32_t g_frameBestArea{ 0 };
+        std::uint32_t g_frameDraws{ 0 };
+        std::uint32_t g_frameMainDraws{ 0 };
+        std::uint32_t g_frameSecondaryDraws{ 0 };
+        std::uint32_t g_frameSizes[4]{};
+        std::uint32_t g_loggedFrameDraws{ 0 };
         void* g_lastTarget{ nullptr };
         std::uint64_t g_hookCalls{ 0 };
         std::uint64_t g_draws{ 0 };
@@ -296,10 +301,15 @@ namespace RadClouds
             multiplyDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_DEST_COLOR;
             multiplyDesc.RenderTarget[0].DestBlend = D3D11_BLEND_ZERO;
             multiplyDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+            multiplyDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+            multiplyDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+            multiplyDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
             multiplyDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
             if (FAILED(device->CreateBlendState(&multiplyDesc, &g_blendMultiply))) {
                 g_shadowReady = false;
                 if (Logger()) Logger()->warn("[Clouds] Multiply blend state creation failed; shadows disabled.");
+            } else if (Logger()) {
+                Logger()->info("[Clouds] Multiply blend state created (DEST_COLOR/ZERO); shadow shaders ok={}.", g_shadowReady);
             }
             D3D11_BUFFER_DESC cbDesc{};
             cbDesc.ByteWidth = sizeof(CloudCB);
@@ -1055,7 +1065,21 @@ namespace RadClouds
                 return;
             }
             if (frame != g_lastFrame) {
+                if (g_frameDraws > 0 && (g_loggedFrameDraws < 6 || frame % 300 == 0)) {
+                    ++g_loggedFrameDraws;
+                    if (auto logger = Logger())
+                        logger->info("[Clouds] Frame {} draws={} main={} secondary={} sizes=[{}x{}, {}x{}, {}x{}, {}x{}]",
+                            g_lastFrame, g_frameDraws, g_frameMainDraws, g_frameSecondaryDraws,
+                            g_frameSizes[0] >> 16, g_frameSizes[0] & 0xFFFF,
+                            g_frameSizes[1] >> 16, g_frameSizes[1] & 0xFFFF,
+                            g_frameSizes[2] >> 16, g_frameSizes[2] & 0xFFFF,
+                            g_frameSizes[3] >> 16, g_frameSizes[3] & 0xFFFF);
+                }
                 g_frameBestArea = 0;
+                g_frameDraws = 0;
+                g_frameMainDraws = 0;
+                g_frameSecondaryDraws = 0;
+                g_frameSizes[0] = g_frameSizes[1] = g_frameSizes[2] = g_frameSizes[3] = 0;
             }
             const std::uint32_t targetArea = target.width * target.height;
             if (targetArea < g_frameBestArea) return;
@@ -1076,6 +1100,20 @@ namespace RadClouds
             g_lastFrame = frame;
             g_lastTarget = target.textureId;
             g_frameBestArea = targetArea;
+            {
+                const bool mainView = targetArea * 10 >= graphicsState->screenWidth * graphicsState->screenHeight * 9;
+                ++g_frameDraws;
+                if (mainView) ++g_frameMainDraws; else ++g_frameSecondaryDraws;
+                for (int i = 0; i < 4; ++i) {
+                    if (g_frameSizes[i] == 0) {
+                        g_frameSizes[i] = (std::min(target.width, 0xFFFFu) << 16) | std::min(target.height, 0xFFFFu);
+                        break;
+                    }
+                }
+                if (g_frameDraws == 1 && (g_loggedFrameDraws < 6 || frame % 300 == 0) && Logger())
+                    Logger()->info("[Clouds] Draw frame={} kind={} size={}x{}", frame, mainView ? "main" : "secondary",
+                        target.width, target.height);
+            }
             if (!g_firstDrawLogged) {
                 g_firstDrawLogged = true;
                 if (logger) logger->info("[Clouds] First draw: target {}x{} skyObjectType={} layer={}/{} source={} cam=({:.0f},{:.0f},{:.0f}) sunDir=({:.2f},{:.2f},{:.2f}) coverage={:.2f} reversedDepth={} depthMode={} debugMode={}.",

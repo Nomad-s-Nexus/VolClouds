@@ -66,7 +66,17 @@ namespace RadClouds
             float blendAlpha{ 1.0f };
             float noiseScale{ 1.0f };
             int depthMode{ 0 };  // 0 = auto, 1 = standard Z (LESS_EQUAL), 2 = reversed Z (GREATER_EQUAL), 3 = no depth test
-            int debugMode{ 0 };  // 0 = normal, 1 = flat magenta (no depth test), 2 = normal colours without depth test
+            int debugMode{ 0 };
+            float layer2Bottom{ 7000.0f };
+            float layer2Top{ 11000.0f };
+            float layer2Density{ 0.9f };
+            float layer2Coverage{ 0.45f };
+            float phaseG{ 0.65f };
+            float powder{ 0.65f };
+            float ambientBoost{ 1.4f };
+            float horizonFade{ 12000.0f };
+            float stormDarken{ 0.35f };
+            float cirrus{ 0.8f };  // 0 = normal, 1 = flat magenta (no depth test), 2 = normal colours without depth test
         };
 
         struct alignas(16) CloudCB
@@ -80,6 +90,9 @@ namespace RadClouds
             DirectX::XMFLOAT4 params0;     // x bottom, y top, z density, w steps
             DirectX::XMFLOAT4 params1;
             DirectX::XMFLOAT4 params2;
+            DirectX::XMFLOAT4 params3;
+            DirectX::XMFLOAT4 params4;
+            DirectX::XMFLOAT4 params5;
         };
 
         struct FrameState
@@ -95,6 +108,7 @@ namespace RadClouds
             float windSpeed{ 0.0f };
             float coverage{ 0.5f };
             float flash{ 0.0f };
+            float stormFactor{ 0.0f };
             float time{ 0.0f };
             bool reversedDepth{ false };
             float nearZ{ 0.0f };
@@ -188,6 +202,16 @@ namespace RadClouds
                 read("fNoiseScale", cfg.noiseScale);
                 read("iDepthMode", cfg.depthMode);
                 read("iDebugMode", cfg.debugMode);
+                read("fLayer2Bottom", cfg.layer2Bottom);
+                read("fLayer2Top", cfg.layer2Top);
+                read("fLayer2Density", cfg.layer2Density);
+                read("fLayer2Coverage", cfg.layer2Coverage);
+                read("fPhase", cfg.phaseG);
+                read("fPowder", cfg.powder);
+                read("fAmbientBoost", cfg.ambientBoost);
+                read("fHorizonFade", cfg.horizonFade);
+                read("fStormDarken", cfg.stormDarken);
+                read("fCirrus", cfg.cirrus);
                 cfg.steps = std::clamp(cfg.steps, 4, 64);
                 cfg.layerTop = std::max(cfg.layerTop, cfg.layerBottom + 100.0f);
                 g_config = cfg;
@@ -462,6 +486,10 @@ namespace RadClouds
             out.windAngle = sky->windAngle;
             out.windSpeed = sky->windSpeed * cfg.windDrift;
             out.flash = std::clamp(sky->flash, 0.0f, 1.0f);
+            if (const auto* weather = sky->currentWeather) {
+                const auto flags = static_cast<std::uint8_t>(weather->weatherData[0xB]);
+                out.stormFactor = (flags & 0x4) ? 0.9f : ((flags & 0x8) ? 0.9f : ((flags & 0x2) ? 0.35f : 0.0f));
+            }
             out.time = static_cast<float>(std::chrono::duration<double>(std::chrono::steady_clock::now() - g_startTime).count());
             out.valid = true;
             return out;
@@ -624,6 +652,9 @@ namespace RadClouds
             cb.params0 = { cfg.layerBottom, cfg.layerTop, cfg.density, static_cast<float>(cfg.steps) };
             cb.params1 = { cfg.maxDistance, cfg.noiseScale, frame.flash, cfg.blendAlpha };
             cb.params2 = { frame.farZ, frame.nearZ, frame.farZ, static_cast<float>(cfg.debugMode) };
+            cb.params3 = { cfg.layer2Bottom, cfg.layer2Top, cfg.layer2Density, cfg.layer2Coverage };
+            cb.params4 = { cfg.phaseG, cfg.powder, cfg.ambientBoost, cfg.horizonFade };
+            cb.params5 = { frame.stormFactor * cfg.stormDarken, frame.stormFactor, cfg.cirrus, frame.coverage };
 
             const D3D11_MAPPED_SUBRESOURCE mapped = [&]() {
                 D3D11_MAPPED_SUBRESOURCE m{};

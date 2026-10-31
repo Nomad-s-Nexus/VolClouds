@@ -829,7 +829,9 @@ namespace RadClouds
             cb.windAndTime = { frame.windAngle, frame.windSpeed, frame.time, frame.coverage };
             cb.params0 = { cfg.layerBottom, cfg.layerTop, cfg.density, static_cast<float>(cfg.steps) };
             cb.params1 = { cfg.maxDistance, cfg.noiseScale, frame.flash, cfg.blendAlpha };
-            cb.params2 = { frame.farZ, frame.nearZ, frame.farZ, static_cast<float>(cfg.debugMode) };
+            const float skyEpsilon = std::clamp(cfg.compositeDepthEpsilon, 0.0f, 0.5f);
+            const float skyZ = frame.reversedDepth ? skyEpsilon : (1.0f - skyEpsilon);
+            cb.params2 = { skyZ, frame.nearZ, frame.farZ, static_cast<float>(cfg.debugMode) };
             cb.params3 = { cfg.layer2Bottom, cfg.layer2Top, cfg.layer2Density, cfg.layer2Coverage };
             cb.params4 = { cfg.phaseG, cfg.powder, cfg.ambientBoost, cfg.horizonFade };
             cb.params5 = { frame.stormFactor * cfg.stormDarken, frame.stormFactor, cfg.cirrus, frame.coverage };
@@ -916,25 +918,13 @@ namespace RadClouds
             ctx->RSSetViewports(1, &savedViewport);
             ctx->OMSetRenderTargets(1, &mainRTV, mainDSV);
             ID3D11ShaderResourceView* compositeSRVs[2]{ g_cloudSRV[current], g_cloudSRV[previous] };
-            ID3D11ShaderResourceView* compositeDepth = DepthSRVFrom(ctx, mainDSV);
-            if (!compositeDepth) {
-                D3D11_MAPPED_SUBRESOURCE patch{};
-                if (ctx->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &patch) >= 0) {
-                    cb.params12.y = 0.0f;
-                    std::memcpy(patch.pData, &cb, sizeof(cb));
-                    ctx->Unmap(g_cb, 0);
-                }
-            }
             ctx->PSSetShader(g_compositePS, nullptr, 0);
             ctx->PSSetShaderResources(0, 2, compositeSRVs);
-            ctx->PSSetShaderResources(4, 1, &compositeDepth);
             ctx->PSSetSamplers(0, 1, &g_clampSampler);
             ctx->OMSetBlendState(g_blend, nullptr, 0xFFFFFFFF);
-            ctx->OMSetDepthStencilState(compositeDepth ? g_depthNone : depthState, 0);
+            ctx->OMSetDepthStencilState(depthState, 0);
             ctx->RSSetState(g_raster);
             ctx->Draw(3, 0);
-            ID3D11ShaderResourceView* noDepthSRV = nullptr;
-            ctx->PSSetShaderResources(4, 1, &noDepthSRV);
             if (cfg.cloudShadows && g_shadowReady) {
                 ID3D11ShaderResourceView* depthSRV = DepthSRVFrom(ctx, mainDSV);
                 if (depthSRV && g_shadowMaskSRV) {
@@ -1220,10 +1210,11 @@ namespace RadClouds
             }
             if (!g_firstDrawLogged) {
                 g_firstDrawLogged = true;
-                if (logger) logger->info("[Clouds] First draw: target {}x{} skyObjectType={} layer={}/{} source={} cam=({:.0f},{:.0f},{:.0f}) sunDir=({:.2f},{:.2f},{:.2f}) coverage={:.2f} reversedDepth={} depthMode={} debugMode={}.",
+                if (logger) logger->info("[Clouds] First draw: target {}x{} skyObjectType={} layer={}/{} source={} cam=({:.0f},{:.0f},{:.0f}) sunDir=({:.2f},{:.2f},{:.2f}) coverage={:.2f} reversedDepth={} depthMode={} debugMode={} skyZ={:.6f} epsilon={:.6f}",
                     target.width, target.height, passInfo.skyObjectType, passInfo.layer, passInfo.numLayers,
                     state.sourceName ? state.sourceName : "?", state.cameraPos.x, state.cameraPos.y, state.cameraPos.z,
-                    state.sunDir.x, state.sunDir.y, state.sunDir.z, state.coverage, state.reversedDepth, cfg.depthMode, cfg.debugMode);
+                    state.sunDir.x, state.sunDir.y, state.sunDir.z, state.coverage, state.reversedDepth, cfg.depthMode, cfg.debugMode,
+                    state.reversedDepth ? cfg.compositeDepthEpsilon : 1.0f - cfg.compositeDepthEpsilon, cfg.compositeDepthEpsilon);
             }
             if (callIndex % 600 == 0 && logger) {
                 logger->info("[Clouds] Stats: calls={} draws={} skipped(disabled={} mode={} pass={} target={} device={} gather={}) types[sun={} glare={} atmo={} clouds={} skyquad={} stars={} moon={} shadow={} other={}] fallback={}.",

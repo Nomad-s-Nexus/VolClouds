@@ -23,9 +23,9 @@ namespace RadClouds
         int depthMode{ 0 };
         int debugMode{ 0 };
         float renderScale{ 0.5f };
-        float temporalBlend{ 0.2f };
+        float temporalBlend{ 0.0f };
         float fogCoupling{ 1.0f };
-        float sunShafts{ 1.0f };
+        float sunShafts{ 0.0f };
         float stormDensityBoost{ 1.5f };
         float stormCoverageBoost{ 0.1f };
         float clearCoverageScale{ 0.55f };

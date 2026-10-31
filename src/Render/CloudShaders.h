@@ -210,8 +210,8 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     float3 scattered = float3(0.0, 0.0, 0.0);
     float3 sunDir = normalize(SunDir.xyz);
     float cosSun = dot(dir, sunDir);
-    float phase = HenyeyGreenstein(cosSun, Params4.x) * 4.0;
-    float phase2 = HenyeyGreenstein(cosSun, -0.25) * 0.35;
+    float phase = HenyeyGreenstein(cosSun, Params4.x) * 1.2;
+    float phase2 = HenyeyGreenstein(cosSun, -0.25) * 0.2;
     float flash = Params1.z;
     float3 ambientSky = AmbientColor.rgb;
     float3 sunTint = SunColor.rgb * SunDir.w;
@@ -258,7 +258,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     color = lerp(color, ambientSky, saturate((1.0 - horizon) * 0.35));
     color *= lerp(1.0, 0.35, storm);
     color += sunTint * flash * 0.18;
-    color += sunTint * pow(saturate(cosSun), 6.0) * 0.10 * (1.0 - transmittance);
+    color = min(color, float3(4.0, 4.0, 4.0));
     return float4(color, alpha);
 }
 )";
@@ -308,7 +308,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
         bool validPrev = abs(prevW) > 1e-6;
         if (validPrev)
             prevNdc = float2(dot(Params7, wp), dot(Params8, wp)) / prevW * 0.5 + 0.5;
-        if (validPrev && all(prevNdc > 0.001) && all(prevNdc < 0.999))
+        if (validPrev && prevW > 0.0 && all(prevNdc > 0.001) && all(prevNdc < 0.999))
         {
             float4 prev = PrevCloudTex.SampleLevel(LinearClamp, prevNdc, 0);
             col.rgb = lerp(cur.rgb, prev.rgb, Params10.x);
@@ -316,7 +316,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
         }
     }
 
-    col.rgb *= 1.0 + Params10.w * Params10.z * 0.25;
+    col.rgb = min(col.rgb, float3(4.0, 4.0, 4.0));
     if (col.a <= 0.002)
         discard;
     return float4(col.rgb * col.a, col.a);

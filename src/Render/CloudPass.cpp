@@ -3,6 +3,12 @@
 #include "Render/CloudShaders.h"
 
 #include <RE/Fallout.h>
+
+#if __has_include(<RE/C/Clouds.h>) && __has_include(<RE/B/BSSkyShaderProperty.h>)
+#define VOLCLOUDS_TYPED_SKY 1
+#else
+#define VOLCLOUDS_TYPED_SKY 0
+#endif
 #include <RE/B/BSGraphics.h>
 #include <RE/B/BSSkyShader.h>
 #include <RE/N/NiBillboardNode.h>
@@ -661,15 +667,26 @@ namespace RadClouds
         bool IsCloudPass(void* a_pass, const RE::Sky* sky, CloudPassInfo* outInfo)
         {
             if (!a_pass) return false;
-            auto* property = *reinterpret_cast<void**>(reinterpret_cast<char*>(a_pass) + 0x10);
+            // TODO-verify BSRenderPass::pShaderProperty offset while no BSRenderPass header exists.
+            void* property = *reinterpret_cast<void**>(reinterpret_cast<char*>(a_pass) + 0x10);
             if (!property) return false;
+#if VOLCLOUDS_TYPED_SKY
+            auto* skyProperty = reinterpret_cast<RE::BSSkyShaderProperty*>(property);
+            const auto skyObjectType = static_cast<int>(skyProperty->skyObjectType);
+            const auto layer = static_cast<std::uint32_t>(skyProperty->usCloudLayer);
+            const auto numLayers = sky->clouds ? static_cast<std::uint32_t>(sky->clouds->usNumLayers) : 0u;
+            if (outInfo)
+                *outInfo = { true, skyObjectType, layer, numLayers };
+            return skyProperty->skyObjectType == RE::BSSkyShaderProperty::SkyObject::kClouds;
+#else
             const auto skyObjectType = *reinterpret_cast<const int*>(reinterpret_cast<const char*>(property) + 0xA8);
             const auto layer = *reinterpret_cast<const std::uint16_t*>(reinterpret_cast<const char*>(property) + 0xA4);
             auto* clouds = *reinterpret_cast<void**>(const_cast<char*>(reinterpret_cast<const char*>(sky)) + 0x88);
             const auto numLayers = clouds ? *reinterpret_cast<const std::uint16_t*>(reinterpret_cast<const char*>(clouds) + 0x510) : 0;
             if (outInfo)
-                *outInfo = { true, static_cast<int>(skyObjectType), static_cast<std::uint32_t>(layer), static_cast<std::uint32_t>(numLayers) };
+                *outInfo = { true, skyObjectType, static_cast<std::uint32_t>(layer), static_cast<std::uint32_t>(numLayers) };
             return skyObjectType == 3;
+#endif
         }
 
         void Hook_SetupGeometry(void* a_shader, void* a_pass)

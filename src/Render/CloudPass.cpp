@@ -41,7 +41,6 @@ namespace RadClouds
 {
     namespace detail
     {
-        constexpr std::size_t kSetupGeometryVTableSlot = 7; using Config = CloudConfig;
         using SetupGeometryFn = void (*)(void*, void*);
         void LoadConfigLocked()
         {

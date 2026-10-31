@@ -32,7 +32,7 @@ namespace RadClouds
         float clearCoverageScale{ 0.55f };
         float sunsetWarmth{ 0.35f };
         bool cloudShadows{ false };
-        float compositeDepthEpsilon{ 0.01f };
+        float compositeDepthEpsilon{ 0.00001f };
         float shadowStrength{ 0.45f };
         float shadowExtent{ 9000.0f };
         int shadowDebug{ 0 };

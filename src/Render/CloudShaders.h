@@ -187,7 +187,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     float slabTop = max(Params0.y, Params3.y);
     float3 origin = CameraPos.xyz;
     float t0 = 0.0;
-    float t1 = min(rayLen, Params1.x);
+    float t1 = Params1.x;
     if (abs(dir.z) < 1e-6)
     {
         if (origin.z < slabBottom || origin.z > slabTop)
@@ -203,9 +203,11 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     if (t1 <= t0)
         discard;
 
+    const float layerThickness = max(Params0.y - Params0.x, 1.0);
+    t1 = min(t1, t0 + layerThickness * 8.0);
     int steps = (int)clamp(Params0.w, 8.0, 64.0);
-    float stepLen = (t1 - t0) / (float)steps;
-    float pixDither = frac(sin(dot(ndc, float2(12.9898, 78.233))) * 43758.5453);
+    float span = max(t1 - t0, 1.0);
+    float pixDither = frac(52.9829189 * frac(dot(svPos.xy, float2(0.06711056, 0.00583715))));
 
     float transmittance = 1.0;
     float3 scattered = float3(0.0, 0.0, 0.0);
@@ -220,9 +222,12 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     [loop]
     for (int i = 0; i < steps; ++i)
     {
-        float dither = frac(sin(dot(ndc + float2((float)i * 0.7548777, (float)i * 0.5698403), float2(12.9898, 78.233))) * 43758.5453);
-        float stepOffset = (dither - 0.5) * 0.9;
-        float t = t0 + stepLen * ((float)i + 0.5 + stepOffset);
+        const float u0 = saturate(((float)i + pixDither) / (float)steps);
+        const float u1 = saturate(((float)i + 1.0 + pixDither) / (float)steps);
+        const float tA = t0 + span * pow(u0, 1.7);
+        const float tB = t0 + span * pow(u1, 1.7);
+        const float stepLen = max(tB - tA, 1.0);
+        float t = 0.5 * (tA + tB);
         float3 p = origin + dir * t;
         float density = SampleDensity(p);
         if (density > 1e-5)
@@ -301,7 +306,7 @@ SamplerState LinearClamp : register(s0);
 
 float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
 {
-    float2 uv = ndc * 0.5 + 0.5;
+    float2 uv = float2(ndc.x, -ndc.y) * 0.5 + 0.5;
     float4 cur = CloudTex.SampleLevel(LinearClamp, uv, 0);
     float4 col = cur;
 
@@ -314,7 +319,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
         float2 prevNdc = float2(0.5, 0.5);
         bool validPrev = abs(prevW) > 1e-6;
         if (validPrev)
-            prevNdc = float2(dot(Params7, wp), dot(Params8, wp)) / prevW * 0.5 + 0.5;
+            prevNdc = float2(dot(Params7, wp), -dot(Params8, wp)) / prevW * 0.5 + 0.5;
         if (validPrev && prevW > 0.0 && all(prevNdc > 0.001) && all(prevNdc < 0.999))
         {
             float4 prev = PrevCloudTex.SampleLevel(LinearClamp, prevNdc, 0);
@@ -452,7 +457,7 @@ SamplerState LinearClampSampler : register(s0);
 
 float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
 {
-    float2 uv = ndc * 0.5 + 0.5;
+    float2 uv = float2(ndc.x, -ndc.y) * 0.5 + 0.5;
     const bool reversed = Params12.z > 0.5;
     const float skyDepth = reversed ? 0.0 : 1.0;
     float depth = DepthTex.SampleLevel(LinearClampSampler, uv, 0);
@@ -481,7 +486,7 @@ SamplerState LinearClampSampler : register(s0);
 
 float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
 {
-    float2 uv = ndc * 0.5 + 0.5;
+    float2 uv = float2(ndc.x, -ndc.y) * 0.5 + 0.5;
     float shadow = ShadowMask.SampleLevel(LinearClampSampler, uv, 0).r;
     return float4(shadow, shadow, shadow, 1.0);
 }
@@ -492,7 +497,7 @@ SamplerState LinearClamp : register(s0);
 
 float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
 {
-    float2 uv = ndc * 0.5 + 0.5;
+    float2 uv = float2(ndc.x, -ndc.y) * 0.5 + 0.5;
     float d = SceneDepth.SampleLevel(LinearClamp, uv, 0);
     return float4(d, d, d, 1.0);
 }

@@ -51,8 +51,12 @@ namespace RadClouds
                 if (!loaded) {
                     logger->info("[Clouds] No config at '{}'; volumetric clouds disabled until enabled in that file.", kCloudConfigPath);
                 } else {
-                    logger->info("[Clouds] Config loaded: enabled={} density={:.2f} steps={} layer=[{:.0f}, {:.0f}] depthMode={}",
-                        cfg.enabled, cfg.density, cfg.steps, cfg.layerBottom, cfg.layerTop, cfg.depthMode);
+                    logger->info("[Clouds] Effective config: enabled={} suppressClouds={} suppressGlare={} shadows={} density={:.3f} coverage={:.3f} blendAlpha={:.3f} noise={:.3f} steps={} renderScale={:.3f} temporal={:.3f}",
+                        cfg.enabled, cfg.suppressVanillaClouds, cfg.suppressSunGlare, cfg.cloudShadows, cfg.density, cfg.coverageScale, cfg.blendAlpha, cfg.noiseScale, cfg.steps, cfg.renderScale, cfg.temporalBlend);
+                    logger->info("[Clouds] Effective geometry: layer=[{:.0f}, {:.0f}] layer2=[{:.0f}, {:.0f}] maxDistance={:.0f} horizonFade={:.0f} layer2Density={:.3f} layer2Coverage={:.3f} cirrus={:.3f} depthMode={} eps={:.6f}",
+                        cfg.layerBottom, cfg.layerTop, cfg.layer2Bottom, cfg.layer2Top, cfg.maxDistance, cfg.horizonFade, cfg.layer2Density, cfg.layer2Coverage, cfg.cirrus, cfg.depthMode, cfg.compositeDepthEpsilon);
+                    logger->info("[Clouds] Effective light: sunIntensity={:.3f} ambient={:.3f} phase={:.3f} powder={:.3f} ambientBoost={:.3f} stormDarken={:.3f} stormDensity={:.3f} sunsetWarmth={:.3f} fogCoupling={:.3f} sunShafts={:.3f} shadowStrength={:.3f} shadowExtent={:.0f}",
+                        cfg.sunIntensity, cfg.ambient, cfg.phaseG, cfg.powder, cfg.ambientBoost, cfg.stormDarken, cfg.stormDensityBoost, cfg.sunsetWarmth, cfg.fogCoupling, cfg.sunShafts, cfg.shadowStrength, cfg.shadowExtent);
                 }
             }
         }

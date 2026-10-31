@@ -128,7 +128,7 @@ float LayerDensity(float3 p, float bottom, float top, float coverage, float scal
 
     float2 windDir = float2(cos(WindAndTime.x), sin(WindAndTime.x)) * WindAndTime.y * 0.0025 * windSign;
     float3 wind = float3(windDir.x, windDir.y, 0.0) * WindAndTime.z;
-    float3 q = p * (0.00060 * Params1.y * scale) + wind;
+    float3 q = p * (0.0035 * Params1.y * scale) + wind;
 
     float warp = Fbm(q * 0.55 + 3.1, 2);
     q += float3(warp, warp * 0.6, warp * 0.3) * 1.8;
@@ -145,7 +145,7 @@ float LayerDensity(float3 p, float bottom, float top, float coverage, float scal
     }
     float n = billow * 0.78 + detail * 0.22;
 
-    float threshold = lerp(0.80, 0.30, saturate(coverage));
+    float threshold = lerp(0.78, 0.26, saturate(coverage));
     float d = max(0.0, n - threshold) / max(1.0 - threshold, 1e-4);
     d = saturate(d) * saturate(d + 0.25);
 
@@ -391,7 +391,7 @@ float ShadowCoverage(float3 p, float bottom, float top, float coverage)
     float3 q = p * (0.00060 * Params1.y) + float3(windDir.x, windDir.y, 0.0) * WindAndTime.z;
     q += float3(FB(q * 0.55 + 3.1, 2), 0.0, 0.0) * 1.2;
     float n = saturate(FB(q, 3) * 1.25);
-    float threshold = lerp(0.80, 0.30, saturate(coverage));
+    float threshold = lerp(0.78, 0.26, saturate(coverage));
     float d = saturate(max(0.0, n - threshold) / max(1.0 - threshold, 1e-4));
     return d * smoothstep(0.0, 0.12, height01) * (1.0 - smoothstep(0.35, 0.9, height01));
 }

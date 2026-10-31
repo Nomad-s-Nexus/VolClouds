@@ -92,6 +92,7 @@ namespace RadClouds
         bool g_loggedNoDepth{ false };
         bool g_loggedTargetSkip{ false };
         std::uint32_t g_lastFrame{ 0xFFFFFFFFu };
+        std::uint32_t g_frameBestArea{ 0 };
         void* g_lastTarget{ nullptr };
         std::uint64_t g_hookCalls{ 0 };
         std::uint64_t g_draws{ 0 };
@@ -292,8 +293,8 @@ namespace RadClouds
 
             D3D11_BLEND_DESC multiplyDesc{};
             multiplyDesc.RenderTarget[0].BlendEnable = TRUE;
-            multiplyDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ZERO;
-            multiplyDesc.RenderTarget[0].DestBlend = D3D11_BLEND_SRC_COLOR;
+            multiplyDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_DEST_COLOR;
+            multiplyDesc.RenderTarget[0].DestBlend = D3D11_BLEND_ZERO;
             multiplyDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
             multiplyDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
             if (FAILED(device->CreateBlendState(&multiplyDesc, &g_blendMultiply))) {
@@ -1053,6 +1054,11 @@ namespace RadClouds
                 }
                 return;
             }
+            if (frame != g_lastFrame) {
+                g_frameBestArea = 0;
+            }
+            const std::uint32_t targetArea = target.width * target.height;
+            if (targetArea < g_frameBestArea) return;
             if (frame == g_lastFrame && target.textureId == g_lastTarget) return;
             const FrameState state = GatherFrameState(graphicsState, sky, cfg);
             if (!state.valid) {
@@ -1069,6 +1075,7 @@ namespace RadClouds
             ++g_draws;
             g_lastFrame = frame;
             g_lastTarget = target.textureId;
+            g_frameBestArea = targetArea;
             if (!g_firstDrawLogged) {
                 g_firstDrawLogged = true;
                 if (logger) logger->info("[Clouds] First draw: target {}x{} skyObjectType={} layer={}/{} source={} cam=({:.0f},{:.0f},{:.0f}) sunDir=({:.2f},{:.2f},{:.2f}) coverage={:.2f} reversedDepth={} depthMode={} debugMode={}.",

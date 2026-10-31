@@ -1,0 +1,15 @@
+{
+  "bEnabled": false,
+  "fDensity": 1.6,
+  "fCoverageScale": 1.0,
+  "fLayerBottom": 3500.0,
+  "fLayerTop": 9000.0,
+  "iSteps": 24,
+  "fSunIntensity": 2.5,
+  "fAmbient": 0.22,
+  "fWindDrift": 1.0,
+  "fMaxDistance": 60000.0,
+  "fBlendAlpha": 1.0,
+  "fNoiseScale": 1.0,
+  "iDepthMode": 0
+}

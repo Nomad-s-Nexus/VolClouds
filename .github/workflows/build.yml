@@ -1,0 +1,75 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows x64 (MSVC)
+    runs-on: windows-latest
+    env:
+      COMMONLIBF4_PIN: 19a5e0dcae23491b2905e8e81ccf8f3c75ad96af
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Cache xmake packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.xmake
+          key: xmake-${{ runner.os }}-${{ hashFiles('xmake.lua') }}
+
+      - name: Fetch CommonLibF4
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          git clone --filter=blob:none https://github.com/G-A-R-D-E-N/commonlibf4-nomad.git commonlibf4
+          git -C commonlibf4 checkout $env:COMMONLIBF4_PIN
+          git -C commonlibf4 submodule update --init --recursive
+          if (-not (Test-Path 'commonlibf4/include/RE/Fallout.h')) { throw 'CommonLibF4 headers missing' }
+          "COMMONLIBF4_PATH=$env:GITHUB_WORKSPACE\commonlibf4" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Verify tools
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          xmake --version
+          cl
+
+      - name: Configure (MSVC, release)
+        shell: pwsh
+        run: xmake f -p windows -a x64 -m release -y
+
+      - name: Build
+        shell: pwsh
+        run: xmake build -y -v VolClouds
+
+      - name: Upload plugin DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: VolClouds-windows-x64
+          path: build/release/VolClouds.dll
+          if-no-files-found: error
+          retention-days: 14

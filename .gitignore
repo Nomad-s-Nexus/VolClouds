@@ -1,0 +1,8 @@
+build/
+build-msvc/
+.xmake/
+.vs/
+*.user
+*.dll
+*.lib
+*.exp

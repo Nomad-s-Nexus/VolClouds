@@ -3,7 +3,7 @@
   "bSuppressVanillaClouds": true,
   "bSuppressSunGlare": false,
   "bCloudShadows": false,
-  "fDensity": 1.6,
+  "fDensity": 0.12,
   "fCoverageScale": 1.0,
   "fLayerBottom": 245000.0,
   "fLayerTop": 630000.0,

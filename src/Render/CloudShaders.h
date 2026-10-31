@@ -203,10 +203,9 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     if (t1 <= t0)
         discard;
 
-    const float layerThickness = max(Params0.y - Params0.x, 1.0);
-    t1 = min(t1, t0 + layerThickness * 8.0);
     int steps = (int)clamp(Params0.w, 8.0, 64.0);
     float span = max(t1 - t0, 1.0);
+    float stepLen = span / (float)steps;
     float pixDither = frac(52.9829189 * frac(dot(svPos.xy, float2(0.06711056, 0.00583715))));
 
     float transmittance = 1.0;
@@ -222,12 +221,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     [loop]
     for (int i = 0; i < steps; ++i)
     {
-        const float u0 = saturate(((float)i + pixDither) / (float)steps);
-        const float u1 = saturate(((float)i + 1.0 + pixDither) / (float)steps);
-        const float tA = t0 + span * pow(u0, 1.7);
-        const float tB = t0 + span * pow(u1, 1.7);
-        const float stepLen = max(tB - tA, 1.0);
-        float t = 0.5 * (tA + tB);
+        float t = t0 + stepLen * ((float)i + 0.5 + (pixDither - 0.5));
         float3 p = origin + dir * t;
         float density = SampleDensity(p);
         if (density > 1e-5)
@@ -239,7 +233,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
             {
                 lightDepth += SampleDensity(p + sunDir * (lightStep * (float)j));
             }
-            lightDepth *= 0.25;
+            lightDepth *= 2.0;
 
             float beer = exp(-lightDepth);
             float beer2 = exp(-lightDepth * 0.25);
@@ -259,7 +253,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     }
 
     float edgeFade = 1.0 - smoothstep(Params1.x * 0.6, Params1.x, t1);
-    float alpha = saturate((1.0 - transmittance) * Params1.w * edgeFade * (1.0 + (pixDither - 0.5) * 0.02));
+    float alpha = saturate((1.0 - transmittance) * Params1.w * edgeFade * (1.0 + (pixDither - 0.5) * 0.005));
     if (alpha <= 0.002)
         discard;
 

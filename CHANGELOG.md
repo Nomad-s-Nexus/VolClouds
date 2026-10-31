@@ -5,10 +5,10 @@ Engine notes in this file are concept-level unless a release entry says they wer
 ## v0.7.0 - game units, extinction, sky clipping, dithering
 
 - Scale: Fallout 4 uses 70 world units per metre. Default deck is now 245000-630000 units (3.5-9 km), high layer 490000-700000 units (7-10 km), noise frequency 2e-5 per unit (~1/50000), max ray distance 2,000,000 units (~28.6 km). All clouds.json values are game units.
-- Extinction: density is normalised by layer thickness (sigma = density / thickness) before exp(-sigma * stepLen); the sun light march is 4 taps over a quarter of the layer thickness, so beer/beer2 produce real shading instead of collapsing to ambient.
+- Extinction: density is normalised by layer thickness (sigma = density / thickness) before exp(-sigma * stepLen); the sun light march is 4 taps over a quarter of the layer thickness with a 2x absorption factor, so beer/beer2 produce real shading instead of collapsing to ambient. Default density is 0.12 (1.6 gave optical depth 1.4-4.8, i.e. an opaque white sheet).
 - Premultiplied alpha: kCloudPS returns premultiplied colour and kCompositePS no longer multiplies by alpha a second time; the ambient mix is scaled by alpha.
 - Removed the stray fullscreen Draw(3,0) that ran the depth-probe shader into the main target on probe frames.
-- Ray length no longer clamped by the near-to-far unprojection distance (t1 = fMaxDistance), removing the circular far-clipping arc; marched span is capped at 8x layer thickness with exponentially growing steps and one stratified interleaved-gradient jitter per ray.
+- Ray length no longer clamped by the near-to-far unprojection distance (t1 = fMaxDistance), removing the circular far-clipping arc; the march covers the slab crossing with uniform steps and one stratified per-ray jitter, so density is sampled densely (the earlier exponentially growing steps sampled hundreds of km per step and produced static).
 - Sky depth epsilon is now 1e-5 (was 0.01, which in nonlinear depth meant about 100x the near plane); effective epsilon/skyZ is logged on the first draw.
 - Texture sampling is V-flipped (float2(ndc.x, -ndc.y)) in composite, shadow, debug and probe shaders.
 - data/clouds.json regenerated to match code defaults (shadows off, temporal off, new units); all effective config values are logged at load.

@@ -10,7 +10,7 @@ namespace RadClouds
         bool enabled{ false };
         bool suppressVanillaClouds{ true };
         bool suppressSunGlare{ false };
-        float density{ 1.6f };
+        float density{ 0.12f };
         float coverageScale{ 1.0f };
         float layerBottom{ 245000.0f };
         float layerTop{ 630000.0f };

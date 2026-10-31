@@ -19,5 +19,9 @@
   "fStormDensityBoost": 1.5,
   "fStormCoverageBoost": 0.1,
   "fClearCoverageScale": 0.55,
-  "fSunsetWarmth": 0.35
+  "fSunsetWarmth": 0.35,
+  "bCloudShadows": true,
+  "fCloudShadowStrength": 0.45,
+  "fCloudShadowExtent": 9000,
+  "iCloudShadowDebug": 0
 }

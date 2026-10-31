@@ -24,6 +24,9 @@ cbuffer CloudCB : register(b0)
     float4 Params8;
     float4 Params9;
     float4 Params10;  // x temporal blend, y exposure scale, z fog coupling, w sun shaft strength
+    float4 Params11;  // x shadow center X, y shadow center Y, z extent, w mask resolution
+    float4 Params12;  // x shadow strength, y far threshold, z reversed depth flag, w shadow debug mode
+    float4 Params13;  // previous view-proj row 3 (for perspective divide)
 };
 
 struct VSOut
@@ -62,6 +65,9 @@ cbuffer CloudCB : register(b0)
     float4 Params8;   // previous view-proj row 1
     float4 Params9;   // previous view-proj row 2
     float4 Params10;  // x temporal blend, y exposure scale, z fog coupling, w sun shaft strength
+    float4 Params11;  // x shadow center X, y shadow center Y, z extent, w mask resolution
+    float4 Params12;  // x shadow strength, y far threshold, z reversed depth flag, w shadow debug mode
+    float4 Params13;  // previous view-proj row 3 (for perspective divide)
 };
 
 Texture3D<float4> CloudNoise : register(t0);
@@ -277,7 +283,10 @@ cbuffer CloudCB : register(b0)
     float4 Params7;
     float4 Params8;
     float4 Params9;
-    float4 Params10;
+    float4 Params10;  // x temporal blend, y exposure scale, z fog coupling, w sun shaft strength
+    float4 Params11;  // x shadow center X, y shadow center Y, z extent, w mask resolution
+    float4 Params12;  // x shadow strength, y far threshold, z reversed depth flag, w shadow debug mode
+    float4 Params13;  // previous view-proj row 3 (for perspective divide)
 };
 
 Texture2D<float4> CloudTex : register(t0);
@@ -295,8 +304,12 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
         float4 farH = mul(float4(ndc, Params2.z, 1.0), InvViewProj);
         float3 dir = normalize(farH.xyz / farH.w - CameraPos.xyz);
         float4 wp = float4(CameraPos.xyz + dir * 6000.0, 1.0);
-        float2 prevNdc = float2(dot(Params7, wp), dot(Params8, wp)) * 0.5 + 0.5;
-        if (all(prevNdc > 0.001) && all(prevNdc < 0.999))
+        float prevW = dot(Params13, wp);
+        float2 prevNdc = float2(0.5, 0.5);
+        bool validPrev = abs(prevW) > 1e-6;
+        if (validPrev)
+            prevNdc = float2(dot(Params7, wp), dot(Params8, wp)) / prevW * 0.5 + 0.5;
+        if (validPrev && all(prevNdc > 0.001) && all(prevNdc < 0.999))
         {
             float4 prev = PrevCloudTex.SampleLevel(LinearClamp, prevNdc, 0);
             col.rgb = lerp(cur.rgb, prev.rgb, Params10.x);
@@ -308,6 +321,163 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     if (col.a <= 0.002)
         discard;
     return float4(col.rgb * col.a, col.a);
+}
+)";
+    inline constexpr char kShadowMaskPS[] = R"(
+cbuffer CloudCB : register(b0)
+{
+    row_major float4x4 InvViewProj;
+    float4 CameraPos;
+    float4 SunDir;
+    float4 SunColor;
+    float4 AmbientColor;
+    float4 WindAndTime;
+    float4 Params0;
+    float4 Params1;
+    float4 Params2;
+    float4 Params3;
+    float4 Params4;
+    float4 Params5;
+    float4 Params6;
+    float4 Params7;
+    float4 Params8;
+    float4 Params9;
+    float4 Params10;
+    float4 Params11;
+    float4 Params12;
+    float4 Params13;
+};
+Texture3D<float4> CloudNoise : register(t0);
+SamplerState LinearWrapSampler : register(s0);
+
+float H13(float3 p)
+{
+    p = frac(p * 0.1031);
+    p += dot(p, p.yzx + 33.33);
+    return frac((p.x + p.y) * p.z);
+}
+
+float N3(float3 p)
+{
+    float3 i = floor(p);
+    float3 f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = lerp(H13(i), H13(i + float3(1, 0, 0)), f.x);
+    float b = lerp(H13(i + float3(0, 1, 0)), H13(i + float3(1, 1, 0)), f.x);
+    float c = lerp(H13(i + float3(0, 0, 1)), H13(i + float3(1, 0, 1)), f.x);
+    float d = lerp(H13(i + float3(0, 1, 1)), H13(i + float3(1, 1, 1)), f.x);
+    return lerp(lerp(a, b, f.y), lerp(c, d, f.y), f.z);
+}
+
+float FB(float3 p, int oct)
+{
+    float sum = 0.0;
+    float amp = 0.55;
+    float3 q = p;
+    for (int i = 0; i < oct; ++i)
+    {
+        sum += N3(q) * amp;
+        q = q * 2.02 + 11.7;
+        amp *= 0.5;
+    }
+    return sum;
+}
+
+float ShadowCoverage(float3 p, float bottom, float top, float coverage)
+{
+    float height01 = saturate((p.z - bottom) / max(top - bottom, 1.0));
+    if (height01 <= 0.0 || height01 >= 1.0)
+        return 0.0;
+    float2 windDir = float2(cos(WindAndTime.x), sin(WindAndTime.x)) * WindAndTime.y * 0.0025;
+    float3 q = p * (0.00060 * Params1.y) + float3(windDir.x, windDir.y, 0.0) * WindAndTime.z;
+    q += float3(FB(q * 0.55 + 3.1, 2), 0.0, 0.0) * 1.2;
+    float n = saturate(FB(q, 3) * 1.25);
+    float threshold = lerp(0.80, 0.30, saturate(coverage));
+    float d = saturate(max(0.0, n - threshold) / max(1.0 - threshold, 1e-4));
+    return d * smoothstep(0.0, 0.12, height01) * (1.0 - smoothstep(0.35, 0.9, height01));
+}
+
+float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
+{
+    float2 uv = ndc * 0.5 + 0.5;
+    float2 worldXY = Params11.xy + (uv - 0.5) * Params11.z;
+    float bottom = min(Params0.x, Params3.x);
+    float top = max(Params0.y, Params3.y);
+    float stepLen = (top - bottom) / 5.0;
+    float optical = 0.0;
+    [unroll]
+    for (int i = 0; i < 5; ++i)
+    {
+        float3 p = float3(worldXY, bottom + stepLen * ((float)i + 0.5));
+        optical += ShadowCoverage(p, Params0.x, Params0.y, Params5.w) * Params0.z * stepLen;
+    }
+    float shadow = 1.0 - exp(-optical * 0.0012);
+    return float4(shadow, shadow, shadow, 1.0);
+}
+)";
+
+    inline constexpr char kCloudShadowPS[] = R"(
+cbuffer CloudCB : register(b0)
+{
+    row_major float4x4 InvViewProj;
+    float4 CameraPos;
+    float4 SunDir;
+    float4 SunColor;
+    float4 AmbientColor;
+    float4 WindAndTime;
+    float4 Params0;
+    float4 Params1;
+    float4 Params2;
+    float4 Params3;
+    float4 Params4;
+    float4 Params5;
+    float4 Params6;
+    float4 Params7;
+    float4 Params8;
+    float4 Params9;
+    float4 Params10;
+    float4 Params11;
+    float4 Params12;
+    float4 Params13;
+};
+Texture2D<float> DepthTex : register(t2);
+Texture2D<float4> ShadowMask : register(t3);
+SamplerState LinearClampSampler : register(s0);
+
+float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
+{
+    float2 uv = ndc * 0.5 + 0.5;
+    const bool reversed = Params12.z > 0.5;
+    const float skyDepth = reversed ? 0.0 : 1.0;
+    float depth = DepthTex.SampleLevel(LinearClampSampler, uv, 0);
+    float3 atten = float3(1.0, 1.0, 1.0);
+    if (abs(depth - skyDepth) > 0.002)
+    {
+        float4 worldH = mul(float4(ndc, depth, 1.0), InvViewProj);
+        if (abs(worldH.w) > 1e-6)
+        {
+            float3 world = worldH.xyz / worldH.w;
+            float2 suv = (world.xy - Params11.xy) / max(Params11.z, 1.0) + 0.5;
+            if (all(suv > 0.0) && all(suv < 1.0))
+            {
+                float shadow = ShadowMask.SampleLevel(LinearClampSampler, suv, 0).r;
+                atten = saturate(1.0 - shadow * Params12.x * saturate(SunDir.z * 2.0));
+            }
+        }
+    }
+    return float4(atten, 1.0);
+}
+)";
+
+    inline constexpr char kShadowDebugPS[] = R"(
+Texture2D<float4> ShadowMask : register(t3);
+SamplerState LinearClampSampler : register(s0);
+
+float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
+{
+    float2 uv = ndc * 0.5 + 0.5;
+    float shadow = ShadowMask.SampleLevel(LinearClampSampler, uv, 0).r;
+    return float4(shadow, shadow, shadow, 1.0);
 }
 )";
 }

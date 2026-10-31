@@ -58,6 +58,9 @@ namespace RadClouds
             DirectX::XMFLOAT4 params8;
             DirectX::XMFLOAT4 params9;
             DirectX::XMFLOAT4 params10;
+            DirectX::XMFLOAT4 params11;
+            DirectX::XMFLOAT4 params12;
+            DirectX::XMFLOAT4 params13;
         };
         struct FrameState
         {
@@ -140,6 +143,17 @@ namespace RadClouds
         int g_cloudIndex{ 0 };
         bool g_hasPrevCloud{ false };
         DirectX::XMFLOAT4 g_prevRows[3]{};
+        DirectX::XMFLOAT4 g_prevRow3{};
+        ID3D11PixelShader* g_shadowMaskPS{ nullptr };
+        ID3D11PixelShader* g_cloudShadowPS{ nullptr };
+        ID3D11PixelShader* g_shadowDebugPS{ nullptr };
+        ID3D11BlendState* g_blendMultiply{ nullptr };
+        ID3D11Texture2D* g_shadowMaskTex{ nullptr };
+        ID3D11ShaderResourceView* g_shadowMaskSRV{ nullptr };
+        ID3D11RenderTargetView* g_shadowMaskRTV{ nullptr };
+        ID3D11ShaderResourceView* g_depthSRV{ nullptr };
+        ID3D11Resource* g_depthSRVRes{ nullptr };
+        bool g_loggedShadowNoDepth{ false };
         std::shared_ptr<spdlog::logger> Logger()
         {
             return spdlog::get("VolClouds");
@@ -188,6 +202,15 @@ namespace RadClouds
             g_cloudWidth = 0;
             g_cloudHeight = 0;
             g_hasPrevCloud = false;
+            release(g_shadowMaskTex);
+            release(g_shadowMaskSRV);
+            release(g_shadowMaskRTV);
+            release(g_shadowMaskPS);
+            release(g_cloudShadowPS);
+            release(g_shadowDebugPS);
+            release(g_blendMultiply);
+            release(g_depthSRV);
+            release(g_depthSRVRes);
             release(g_ps);
             release(g_vs);
             g_device = nullptr;
@@ -250,6 +273,30 @@ namespace RadClouds
             clampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
             clampDesc.MaxLOD = D3D11_FLOAT32_MAX;
             if (FAILED(device->CreateSamplerState(&clampDesc, &g_clampSampler))) return false;
+
+            const auto compilePS = [&](const char* src, ID3D11PixelShader** out) {
+                ID3DBlob* blob = nullptr;
+                ID3DBlob* error = nullptr;
+                const bool ok = SUCCEEDED(D3DCompile(src, std::strlen(src), nullptr, nullptr, nullptr, "main", "ps_5_0",
+                    D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &blob, &error)) && blob &&
+                    SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, out));
+                if (!ok && Logger())
+                    Logger()->error("[Clouds] Shadow shader compile failed: {}", error ? static_cast<const char*>(error->GetBufferPointer()) : "unknown");
+                if (error) error->Release();
+                if (blob) blob->Release();
+                return ok;
+            };
+            if (!compilePS(Shaders::kShadowMaskPS, &g_shadowMaskPS)) return false;
+            if (!compilePS(Shaders::kCloudShadowPS, &g_cloudShadowPS)) return false;
+            if (!compilePS(Shaders::kShadowDebugPS, &g_shadowDebugPS)) return false;
+
+            D3D11_BLEND_DESC multiplyDesc{};
+            multiplyDesc.RenderTarget[0].BlendEnable = TRUE;
+            multiplyDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ZERO;
+            multiplyDesc.RenderTarget[0].DestBlend = D3D11_BLEND_SRC_COLOR;
+            multiplyDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+            multiplyDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+            if (FAILED(device->CreateBlendState(&multiplyDesc, &g_blendMultiply))) return false;
             D3D11_BUFFER_DESC cbDesc{};
             cbDesc.ByteWidth = sizeof(CloudCB);
             cbDesc.Usage = D3D11_USAGE_DYNAMIC;
@@ -347,6 +394,50 @@ namespace RadClouds
             }
             return true;
         }
+        bool EnsureShadowMask(ID3D11Device* device)
+        {
+            if (g_shadowMaskTex) return true;
+            D3D11_TEXTURE2D_DESC desc{};
+            desc.Width = 128;
+            desc.Height = 128;
+            desc.MipLevels = 1;
+            desc.ArraySize = 1;
+            desc.Format = DXGI_FORMAT_R8_UNORM;
+            desc.SampleDesc.Count = 1;
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+            if (device->CreateTexture2D(&desc, nullptr, &g_shadowMaskTex) < 0) return false;
+            if (device->CreateShaderResourceView(g_shadowMaskTex, nullptr, &g_shadowMaskSRV) < 0) return false;
+            if (device->CreateRenderTargetView(g_shadowMaskTex, nullptr, &g_shadowMaskRTV) < 0) return false;
+            return true;
+        }
+
+        ID3D11ShaderResourceView* DepthSRVFrom(ID3D11DeviceContext* ctx, ID3D11DepthStencilView* dsv)
+        {
+            if (!dsv) return nullptr;
+            ID3D11Resource* res = nullptr;
+            dsv->GetResource(&res);
+            if (!res) return nullptr;
+            if (res == g_depthSRVRes && g_depthSRV) { res->Release(); return g_depthSRV; }
+            if (g_depthSRV) { g_depthSRV->Release(); g_depthSRV = nullptr; }
+            if (g_depthSRVRes) { g_depthSRVRes->Release(); g_depthSRVRes = nullptr; }
+            D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+            srv.Format = DXGI_FORMAT_R32_FLOAT;
+            srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srv.Texture2D.MipLevels = 1;
+            if (g_device->CreateShaderResourceView(res, &srv, &g_depthSRV) < 0) {
+                g_depthSRV = nullptr;
+                if (!g_loggedShadowNoDepth && Logger()) {
+                    g_loggedShadowNoDepth = true;
+                    Logger()->warn("[Clouds] Scene depth SRV unavailable; cloud shadows on terrain disabled.");
+                }
+                res->Release();
+                return nullptr;
+            }
+            g_depthSRVRes = res;
+            return g_depthSRV;
+        }
+
         bool EnsureDeviceResources()
         {
             auto* data = RE::BSGraphics::GetRendererData();
@@ -682,6 +773,9 @@ namespace RadClouds
             cb.params8 = g_hasPrevCloud ? g_prevRows[1] : DirectX::XMFLOAT4{ 0, 0, 0, 0 };
             cb.params9 = g_hasPrevCloud ? g_prevRows[2] : DirectX::XMFLOAT4{ 0, 0, 0, 0 };
             cb.params10 = { g_hasPrevCloud ? cfg.temporalBlend : 0.0f, 1.0f, cfg.fogCoupling, cfg.sunShafts };
+            cb.params11 = { frame.cameraPos.x, frame.cameraPos.y, cfg.shadowExtent, 128.0f };
+            cb.params12 = { cfg.shadowStrength, 0.0f, frame.reversedDepth ? 1.0f : 0.0f, static_cast<float>(cfg.shadowDebug) };
+            cb.params13 = g_hasPrevCloud ? g_prevRow3 : DirectX::XMFLOAT4{ 0, 0, 0, 0 };
             const D3D11_MAPPED_SUBRESOURCE mapped = [&]() {
                 D3D11_MAPPED_SUBRESOURCE m{};
                 ctx->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m);
@@ -741,6 +835,19 @@ namespace RadClouds
                 ctx->RSSetState(g_raster);
                 ctx->Draw(3, 0);
             }
+            if (cfg.cloudShadows && EnsureShadowMask(g_device)) {
+                D3D11_VIEWPORT maskViewport{ 0.0f, 0.0f, 128.0f, 128.0f, 0.0f, 1.0f };
+                ctx->RSSetViewports(1, &maskViewport);
+                ctx->OMSetRenderTargets(1, &g_shadowMaskRTV, nullptr);
+                ctx->PSSetShader(g_shadowMaskPS, nullptr, 0);
+                ctx->PSSetShaderResources(0, 1, &g_noiseSRV);
+                ctx->PSSetSamplers(0, 1, &g_noiseSampler);
+                ctx->OMSetBlendState(g_blendOpaque, nullptr, 0xFFFFFFFF);
+                ctx->OMSetDepthStencilState(g_depthNone, 0);
+                ctx->RSSetState(g_raster);
+                ctx->Draw(3, 0);
+            }
+
             ctx->RSSetViewports(1, &savedViewport);
             ctx->OMSetRenderTargets(1, &mainRTV, mainDSV);
             ID3D11ShaderResourceView* compositeSRVs[2]{ g_cloudSRV[current], g_cloudSRV[previous] };
@@ -751,13 +858,38 @@ namespace RadClouds
             ctx->OMSetDepthStencilState(depthState, 0);
             ctx->RSSetState(g_raster);
             ctx->Draw(3, 0);
-            ID3D11ShaderResourceView* noSRVs[2]{ nullptr, nullptr };
-            ctx->PSSetShaderResources(0, 2, noSRVs);
+            if (cfg.cloudShadows) {
+                ID3D11ShaderResourceView* depthSRV = DepthSRVFrom(ctx, mainDSV);
+                if (depthSRV && g_shadowMaskSRV) {
+                    ctx->PSSetShader(g_cloudShadowPS, nullptr, 0);
+                    ctx->PSSetShaderResources(2, 1, &depthSRV);
+                    ctx->PSSetShaderResources(3, 1, &g_shadowMaskSRV);
+                    ctx->PSSetSamplers(0, 1, &g_clampSampler);
+                    ctx->OMSetBlendState(g_blendMultiply, nullptr, 0xFFFFFFFF);
+                    ctx->OMSetDepthStencilState(g_depthNone, 0);
+                    ctx->RSSetState(g_raster);
+                    ctx->Draw(3, 0);
+                }
+            }
+
+            if (cfg.shadowDebug > 0 && g_shadowMaskSRV) {
+                ctx->PSSetShader(g_shadowDebugPS, nullptr, 0);
+                ctx->PSSetShaderResources(3, 1, &g_shadowMaskSRV);
+                ctx->PSSetSamplers(0, 1, &g_clampSampler);
+                ctx->OMSetBlendState(g_blendOpaque, nullptr, 0xFFFFFFFF);
+                ctx->OMSetDepthStencilState(g_depthNone, 0);
+                ctx->RSSetState(g_raster);
+                ctx->Draw(3, 0);
+            }
+
+            ID3D11ShaderResourceView* noSRVs[3]{ nullptr, nullptr, nullptr };
+            ctx->PSSetShaderResources(0, 3, noSRVs);
             if (mainDSV) mainDSV->Release();
             mainRTV->Release();
             g_prevRows[0] = { frame.viewProj._11, frame.viewProj._12, frame.viewProj._13, frame.viewProj._14 };
             g_prevRows[1] = { frame.viewProj._21, frame.viewProj._22, frame.viewProj._23, frame.viewProj._24 };
             g_prevRows[2] = { frame.viewProj._31, frame.viewProj._32, frame.viewProj._33, frame.viewProj._34 };
+            g_prevRow3 = { frame.viewProj._41, frame.viewProj._42, frame.viewProj._43, frame.viewProj._44 };
             g_hasPrevCloud = true;
             g_cloudIndex = previous;
             ctx->Draw(3, 0);

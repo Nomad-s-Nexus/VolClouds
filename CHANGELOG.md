@@ -1,0 +1,123 @@
+# Changelog
+
+## v0.7.3 - coherent cloud density, elevation fade
+
+- `CloudShaders.h:LayerDensity` rewritten: two noise warps, one low-frequency base and one mid-frequency
+  octave, a small erosion term, and a smootherstep coverage remap. Noise frequency is 1.5e-6 per unit
+  (about 660,000 units, i.e. cloud masses instead of per-pixel speckle); the previous 2e-5 gave 50,000-unit
+  features which at 1,000,000-unit viewing distance are only a few pixels and read as static.
+- Slab edge: the hard circular boundary came from the grazing-slab path fade; it is replaced by an
+  elevation fade `smoothstep(0, 0.13, dir.z)`, which is zero exactly at the horizon where the ray stops
+  crossing the layer.
+- Offline headless render (WARP, fixed camera, real `kCloudPS`): 35-degree pitch now shows coherent cloud
+  masses, mean alpha 0.10, max 0.70, no per-pixel static. 12-degree pitch still shows a speckled band and
+  a visible boundary; that remains open and is not claimed fixed.
+
+## v0.7.2 - horizon fade and deployed config units
+
+- In-game run showed TMR still loading the pre-unit-change `clouds.json` (layer 3500-9000, density 3.0,
+  maxDistance 400000, horizonFade 20000, epsilon 0.01) even though the repo defaults had been updated;
+  the file was deployed and the log now prints the new effective values.
+- `fHorizonFade` default is now 400000 units (about 5.7 km). At the old 12000 units (about 171 m) the
+  horizon term `exp(-t0 / horizonFade)` with `t0 >= 240000` units evaluated to about e-20, i.e. it faded
+  the whole deck out before it started. This is the first in-game/offline mismatch found by launching:
+  the offline harness had been using a units-correct fade.
+
+## v0.7.1 - unprojection guard
+
+- Fixed a fatal ray-setup bug found with a headless D3D11 render of `kCloudPS`: far-plane unprojection has
+  homogeneous `w` about `1 / farPlane` (1e-6 for a 2,000,000-unit far plane), and the old
+  `abs(w) < 1e-6 -> discard` guard therefore discarded every pixel, so no density, step or jitter change
+  could ever be visible. The guard is now `isnan` plus `1e-12`, and the raymarch renders again (offline:
+  mean alpha 0.14, max 0.36, 61% non-zero coverage at 35 degrees pitch). Remaining offline finding:
+  the density field is still per-pixel speckle instead of coherent cloud shapes, and the slab edge is a
+  hard circular boundary; both are the next work item, not fixed here.
+
+Engine notes in this file are concept-level unless a release entry says they were verified in game.
+
+## v0.7.0 - game units, extinction, sky clipping, dithering
+
+- Scale: Fallout 4 uses 70 world units per metre. Default deck is now 245000-630000 units (3.5-9 km), high layer 490000-700000 units (7-10 km), noise frequency 2e-5 per unit (~1/50000), max ray distance 2,000,000 units (~28.6 km). All clouds.json values are game units.
+- Extinction: density is normalised by layer thickness (sigma = density / thickness) before exp(-sigma * stepLen); the sun light march is 4 taps over a quarter of the layer thickness with a 2x absorption factor, so beer/beer2 produce real shading instead of collapsing to ambient. Default density is 0.12 (1.6 gave optical depth 1.4-4.8, i.e. an opaque white sheet).
+- Premultiplied alpha: kCloudPS returns premultiplied colour and kCompositePS no longer multiplies by alpha a second time; the ambient mix is scaled by alpha.
+- Removed the stray fullscreen Draw(3,0) that ran the depth-probe shader into the main target on probe frames.
+- Ray length no longer clamped by the near-to-far unprojection distance (t1 = fMaxDistance), removing the circular far-clipping arc; the march covers the slab crossing with uniform steps and one stratified per-ray jitter, so density is sampled densely (the earlier exponentially growing steps sampled hundreds of km per step and produced static).
+- Sky depth epsilon is now 1e-5 (was 0.01, which in nonlinear depth meant about 100x the near plane); effective epsilon/skyZ is logged on the first draw.
+- Texture sampling is V-flipped (float2(ndc.x, -ndc.y)) in composite, shadow, debug and probe shaders.
+- data/clouds.json regenerated to match code defaults (shadows off, temporal off, new units); all effective config values are logged at load.
+- Module split: CloudInternal.h, CloudDevice.cpp, CloudFrame.cpp; CloudPass.cpp is under the 1000-line limit.
+
+All notable changes to VolClouds. Versions are GitHub releases; the plugin reports the same version to F4SE.
+
+## v0.4.0 - half-res + temporal, weather presets, fog/sun-shaft coupling
+
+- Raymarch now renders into a half-resolution RGBA16F target (`fRenderScale`, default 0.5) and is
+  composited full-resolution, freeing steps for 48-64 (`iSteps`).
+- Temporal accumulation across frames (`fTemporalBlend`, default 0.2) with previous-view-projection
+  reprojection, reducing visible noise in thin edge detail.
+- Weather presets: storm weathers thicken and darken the deck and speed up wind; clear weathers thin it
+  out (`fStormDensityBoost`, `fStormCoverageBoost`, `fClearCoverageScale`).
+- Sunset warmth: low sun tints the deck's sun side warm (`fSunsetWarmth`).
+- Fog and sun-shaft coupling (`fFogCoupling`, `fSunShafts`): the deck fades toward the fog colour at the
+  horizon and its sun glow is modulated so shafts read through the cloud layer.
+- Configuration extracted into `Render/CloudConfig.{h,cpp}`.
+
+## v0.3.4 - visible density with volume detail
+
+- Restored the procedural billow base as the shape function and layered the generated 3D noise volume
+  on top as detail, fixing a density-threshold regression that made clouds invisible.
+
+## v0.3.3 - chunkier cumulus
+
+- Lower coverage threshold, bottom-heavy vertical profile, 6-tap self-shadow light march, sun glow.
+
+## v0.3.2 - noise contrast fix
+
+- Remapped the generated noise volume to full 0-1 contrast before the density threshold.
+
+## v0.3.1 - per-target draw latch
+
+- Cloud draws latch per (frameID, render target) so a reflection/water sky pass cannot consume the
+  main-scene draw (fixes clouds vanishing in third person near water).
+
+## v0.3.0 - generated 3D noise volume
+
+- `data/cloudnoise.dds`: 64^3 tileable R8G8B8A8 volume generated by `tools/gen_cloud_noise.py`
+  (billow, worley cells, detail), loaded as a D3D11 3D texture with procedural fallback.
+
+## v0.2.1 - vanilla cloud suppression + debug hotkeys
+
+- `bSuppressVanillaClouds` zeroes the vanilla cloud layers' blend alpha so the volumetric deck is the
+  only cloud layer.
+- F10 full-screen magenta debug override; F11 toggles vanilla cloud suppression at runtime.
+
+## v0.2.0 - RDR2-style two-layer clouds
+
+- Two-layer raymarch: billowy low cumulus with domain warp + thin high cirrus.
+- Henyey-Greenstein silver lining with powder term, 4-tap sun light march, horizon fade, storm darkening.
+
+## v0.1.5 - typed sky headers
+
+- Uses CommonLibF4 `Clouds` / `BSSkyShaderProperty` typed members when the checkout provides them,
+  offset fallback otherwise.
+
+## v0.1.4 - vtable self-check
+
+- Logs the resolved `BSSkyShader` vtable base at install for AE verification.
+
+## v0.1.3 - camera matrix sources
+
+- Camera data read from `State::cameraState`, the active `RendererData::shadowState` camera, and the
+  camera-data cache; world-space cloud origin; `iDebugMode` / `iDepthMode` debug paths.
+
+## v0.1.2 - draw on any cloud pass
+
+- Accepts any `SO_CLOUDS` pass, per-type sky-pass counters, fallback to sky-quad/atmosphere.
+
+## v0.1.1 - AE load fix and diagnostics
+
+- Exports `FSEPlugin_Version` (AE F4SE refuses plugins without it), bootstrap log, per-decision logging.
+
+## v0.1.0 - first build
+
+- M1 volumetric cloud pass hooked at `BSSkyShader::SetupGeometry`, depth-tested fullscreen raymarch.

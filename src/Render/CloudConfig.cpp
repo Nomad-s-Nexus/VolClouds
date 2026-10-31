@@ -24,6 +24,7 @@ namespace RadClouds
             };
             read("bEnabled", cfg.enabled);
             read("bSuppressVanillaClouds", cfg.suppressVanillaClouds);
+            read("bSuppressSunGlare", cfg.suppressSunGlare);
             read("fDensity", cfg.density);
             read("fCoverageScale", cfg.coverageScale);
             read("fLayerBottom", cfg.layerBottom);
@@ -45,6 +46,11 @@ namespace RadClouds
             read("fStormCoverageBoost", cfg.stormCoverageBoost);
             read("fClearCoverageScale", cfg.clearCoverageScale);
             read("fSunsetWarmth", cfg.sunsetWarmth);
+            read("bCloudShadows", cfg.cloudShadows);
+            read("fCompositeDepthEpsilon", cfg.compositeDepthEpsilon);
+            read("fCloudShadowStrength", cfg.shadowStrength);
+            read("fCloudShadowExtent", cfg.shadowExtent);
+            read("iCloudShadowDebug", cfg.shadowDebug);
             read("fLayer2Bottom", cfg.layer2Bottom);
             read("fLayer2Top", cfg.layer2Top);
             read("fLayer2Density", cfg.layer2Density);

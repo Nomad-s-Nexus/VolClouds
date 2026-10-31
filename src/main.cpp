@@ -118,7 +118,7 @@ namespace
 
 F4SE_PLUGIN_VERSION = []() noexcept {
     F4SE::PluginVersionData data{};
-    data.PluginVersion(REL::Version(0, 4, 0));
+    data.PluginVersion(REL::Version(0, 7, 3));
     data.PluginName("Volumetric Clouds");
     data.AuthorName("NomadsReach");
     data.UsesSigScanning(false);
@@ -168,6 +168,7 @@ F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
     }
 
     logger->info("Runtime: {}", GameVersionString(g_gameVersion));
+    logger->info("Plugin version 0.7.3 loaded.");
     {
         std::error_code ec;
         const auto config = std::filesystem::current_path(ec) / L"Data/F4SE/Plugins/VolClouds/clouds.json";

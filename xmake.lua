@@ -1,6 +1,5 @@
 set_xmakever("3.0.0")
 
--- Requires CommonLibF4: set COMMONLIBF4_PATH to a checkout (CI clones the pinned nomad fork).
 if is_plat("windows") then
     local commonlib_path = os.getenv("COMMONLIBF4_PATH") or "../commonlibf4-nomad"
     if not os.isdir(path.join(commonlib_path, "include", "RE")) then

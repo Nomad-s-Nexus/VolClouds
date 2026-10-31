@@ -18,7 +18,7 @@ namespace RadClouds
         float sunIntensity{ 2.5f };
         float ambient{ 0.22f };
         float windDrift{ 1.0f };
-        float maxDistance{ 60000.0f };
+        float maxDistance{ 400000.0f };
         float blendAlpha{ 1.0f };
         float noiseScale{ 1.0f };
         int depthMode{ 0 };

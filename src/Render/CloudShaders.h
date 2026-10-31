@@ -251,7 +251,8 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
         }
     }
 
-    float alpha = saturate((1.0 - transmittance) * Params1.w * (1.0 + (pixDither - 0.5) * 0.02));
+    float edgeFade = 1.0 - smoothstep(Params1.x * 0.6, Params1.x, t1);
+    float alpha = saturate((1.0 - transmittance) * Params1.w * edgeFade * (1.0 + (pixDither - 0.5) * 0.02));
     if (alpha <= 0.002)
         discard;
 

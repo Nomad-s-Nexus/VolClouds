@@ -24,6 +24,7 @@ namespace RadClouds
             };
             read("bEnabled", cfg.enabled);
             read("bSuppressVanillaClouds", cfg.suppressVanillaClouds);
+            read("bSuppressSunGlare", cfg.suppressSunGlare);
             read("fDensity", cfg.density);
             read("fCoverageScale", cfg.coverageScale);
             read("fLayerBottom", cfg.layerBottom);

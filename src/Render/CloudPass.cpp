@@ -954,12 +954,14 @@ namespace RadClouds
                 if (void* property = SkyPropertyOfPass(a_pass)) {
 #if VOLCLOUDS_TYPED_SKY
                     auto* skyProperty = reinterpret_cast<RE::BSSkyShaderProperty*>(property);
-                    if (skyProperty->skyObjectType == RE::BSSkyShaderProperty::SkyObject::kClouds)
-                        skyProperty->kBlendColor.a = 0.0f;
+                    const int type = static_cast<int>(skyProperty->skyObjectType);
 #else
-                    if (*reinterpret_cast<const int*>(reinterpret_cast<const char*>(property) + 0xA8) == 3)
-                        *reinterpret_cast<float*>(reinterpret_cast<char*>(property) + 0x7C) = 0.0f;
+                    const int type = *reinterpret_cast<const int*>(reinterpret_cast<const char*>(property) + 0xA8);
 #endif
+                    const bool isVanillaCloud = type == 3;
+                    const bool isSunGlare = cfg.suppressSunGlare && (type == 0 || type == 1);
+                    if (isVanillaCloud || isSunGlare)
+                        *reinterpret_cast<float*>(reinterpret_cast<char*>(property) + 0x7C) = 0.0f;
                 }
             }
             if (g_original)

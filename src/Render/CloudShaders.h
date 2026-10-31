@@ -52,7 +52,11 @@ cbuffer CloudCB : register(b0)
     float4 Params3;   // high layer: bottom, top, density, coverage
     float4 Params4;   // phase g, powder, ambient boost, horizon fade
     float4 Params5;   // storm darken, storm coverage, cirrus, low coverage
+    float4 Params6;   // x has noise volume
 };
+
+Texture3D<float4> CloudNoise : register(t0);
+SamplerState LinearWrapSampler : register(s0);
 
 float Hash13(float3 p)
 {
@@ -115,8 +119,21 @@ float LayerDensity(float3 p, float bottom, float top, float coverage, float scal
     float warp = Fbm(q * 0.55 + 3.1, 2);
     q += float3(warp, warp * 0.6, warp * 0.3) * 1.8;
 
-    float billow = Billow(q);
-    float detail = Fbm(q * 3.4 + 21.0, 2);
+    float billow;
+    float detail;
+    if (Params6.x > 0.5)
+    {
+        float3 uv = q * 0.35;
+        float3 n1 = CloudNoise.SampleLevel(LinearWrapSampler, uv, 0).rgb;
+        float3 n2 = CloudNoise.SampleLevel(LinearWrapSampler, uv * 2.7 + 0.31, 0).rgb;
+        billow = saturate(n1.r * 0.62 + n1.g * 0.38);
+        detail = saturate(n2.b * 0.65 + n2.g * 0.35);
+    }
+    else
+    {
+        billow = Billow(q);
+        detail = Fbm(q * 3.4 + 21.0, 2);
+    }
     float n = billow * 0.78 + detail * 0.22;
 
     float threshold = lerp(0.72, 0.28, saturate(coverage));

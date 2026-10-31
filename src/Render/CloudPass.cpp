@@ -94,6 +94,7 @@ namespace RadClouds
             DirectX::XMFLOAT4 params3;
             DirectX::XMFLOAT4 params4;
             DirectX::XMFLOAT4 params5;
+            DirectX::XMFLOAT4 params6;
         };
 
         struct FrameState
@@ -165,6 +166,8 @@ namespace RadClouds
         ID3D11DepthStencilState* g_depthReversed{ nullptr };
         ID3D11DepthStencilState* g_depthNone{ nullptr };
         ID3D11RasterizerState* g_raster{ nullptr };
+        ID3D11ShaderResourceView* g_noiseSRV{ nullptr };
+        ID3D11SamplerState* g_noiseSampler{ nullptr };
 
         std::shared_ptr<spdlog::logger> Logger()
         {
@@ -247,6 +250,8 @@ namespace RadClouds
             release(g_depthStandard);
             release(g_blend);
             release(g_cb);
+            release(g_noiseSRV);
+            release(g_noiseSampler);
             release(g_ps);
             release(g_vs);
             g_device = nullptr;
@@ -328,6 +333,39 @@ namespace RadClouds
             return true;
         }
 
+        bool LoadNoiseVolume(ID3D11Device* device)
+        {
+            constexpr const char* path = "Data/F4SE/Plugins/VolClouds/cloudnoise.dds";
+            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            if (!file.is_open()) return false;
+            const auto size = static_cast<std::size_t>(file.tellg());
+            if (size < 148 + 65536) return false;
+            std::vector<char> bytes(size);
+            file.seekg(0);
+            file.read(bytes.data(), static_cast<std::streamsize>(size));
+            if (std::memcmp(bytes.data(), "DDS ", 4) != 0) return false;
+            const auto* h = reinterpret_cast<const std::uint32_t*>(bytes.data() + 4);
+            const std::uint32_t height = h[2], width = h[3], depth = h[5];
+            if (h[31] != 28 || h[32] != 4 || width == 0 || height == 0 || depth == 0 || width > 512 || height > 512 || depth > 512) return false;
+            D3D11_TEXTURE3D_DESC desc{};
+            desc.Width = width; desc.Height = height; desc.Depth = depth; desc.MipLevels = 1;
+            desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; desc.Usage = D3D11_USAGE_IMMUTABLE; desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            D3D11_SUBRESOURCE_DATA init{};
+            init.pSysMem = bytes.data() + 148; init.SysMemPitch = width * 4; init.SysMemSlicePitch = width * height * 4;
+            ID3D11Texture3D* texture = nullptr;
+            if (device->CreateTexture3D(&desc, &init, &texture) < 0 || !texture) return false;
+            D3D11_SHADER_RESOURCE_VIEW_DESC srv{}; srv.Format = desc.Format; srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D; srv.Texture3D.MipLevels = 1;
+            const long hr = static_cast<long>(device->CreateShaderResourceView(texture, &srv, &g_noiseSRV));
+            texture->Release();
+            if (hr < 0) return false;
+            D3D11_SAMPLER_DESC sd{};
+            sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; sd.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+            sd.AddressV = D3D11_TEXTURE_ADDRESS_WRAP; sd.AddressW = D3D11_TEXTURE_ADDRESS_WRAP; sd.MaxLOD = D3D11_FLOAT32_MAX;
+            if (device->CreateSamplerState(&sd, &g_noiseSampler) < 0) return false;
+            if (auto logger = Logger()) logger->info("[Clouds] Noise volume loaded {}x{}x{}.", width, height, depth);
+            return true;
+        }
+
         bool EnsureDeviceResources()
         {
             auto* data = RE::BSGraphics::GetRendererData();
@@ -345,6 +383,7 @@ namespace RadClouds
                 g_failedDevice = rawDevice;
                 return false;
             }
+            LoadNoiseVolume(g_device);
             if (auto logger = Logger())
                 logger->info("[Clouds] D3D11 resources created for device {:p}.", static_cast<void*>(g_device));
             return true;
@@ -661,6 +700,7 @@ namespace RadClouds
             cb.params3 = { cfg.layer2Bottom, cfg.layer2Top, cfg.layer2Density, cfg.layer2Coverage };
             cb.params4 = { cfg.phaseG, cfg.powder, cfg.ambientBoost, cfg.horizonFade };
             cb.params5 = { frame.stormFactor * cfg.stormDarken, frame.stormFactor, cfg.cirrus, frame.coverage };
+            cb.params6 = { g_noiseSRV ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
 
             const D3D11_MAPPED_SUBRESOURCE mapped = [&]() {
                 D3D11_MAPPED_SUBRESOURCE m{};
@@ -693,6 +733,8 @@ namespace RadClouds
             ctx->DSSetShader(nullptr, nullptr, 0);
             ctx->VSSetConstantBuffers(0, 1, &g_cb);
             ctx->PSSetConstantBuffers(0, 1, &g_cb);
+            ctx->PSSetShaderResources(0, 1, &g_noiseSRV);
+            ctx->PSSetSamplers(0, 1, &g_noiseSampler);
             ctx->OMSetBlendState(g_blend, nullptr, 0xFFFFFFFF);
             ctx->OMSetDepthStencilState(depthState, 0);
             ctx->RSSetState(g_raster);

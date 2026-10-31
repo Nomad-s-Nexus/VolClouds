@@ -99,6 +99,8 @@ float DensityAt(float3 p, float bottom, float top)
 
 float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
 {
+    if (Params2.w > 0.5)
+        return float4(0.8, 0.0, 0.8, 0.6);
     float4 nearH = mul(float4(ndc, Params2.y, 1.0), InvViewProj);
     float4 farH = mul(float4(ndc, Params2.z, 1.0), InvViewProj);
     if (abs(nearH.w) < 1e-6 || abs(farH.w) < 1e-6)

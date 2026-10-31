@@ -59,7 +59,8 @@ namespace RadClouds
             float maxDistance{ 60000.0f };
             float blendAlpha{ 1.0f };
             float noiseScale{ 1.0f };
-            int depthMode{ 0 };  // 0 = auto, 1 = standard Z (LESS_EQUAL), 2 = reversed Z (GREATER_EQUAL)
+            int depthMode{ 0 };  // 0 = auto, 1 = standard Z (LESS_EQUAL), 2 = reversed Z (GREATER_EQUAL), 3 = no depth test
+            int debugMode{ 0 };  // 0 = normal, 1 = flat magenta (no depth test), 2 = normal colours without depth test
         };
 
         struct alignas(16) CloudCB
@@ -92,6 +93,10 @@ namespace RadClouds
             bool reversedDepth{ false };
             float nearZ{ 0.0f };
             float farZ{ 1.0f };
+            DirectX::XMFLOAT3 posAdjust{};
+            const char* sourceName{ nullptr };
+            bool hadMatrix{ false };
+            float matrixSample[4]{};
         };
 
         using SetupGeometryFn = void (*)(void*, void*);
@@ -176,6 +181,7 @@ namespace RadClouds
                 read("fBlendAlpha", cfg.blendAlpha);
                 read("fNoiseScale", cfg.noiseScale);
                 read("iDepthMode", cfg.depthMode);
+                read("iDebugMode", cfg.debugMode);
                 cfg.steps = std::clamp(cfg.steps, 4, 64);
                 cfg.layerTop = std::max(cfg.layerTop, cfg.layerBottom + 100.0f);
                 g_config = cfg;
@@ -335,34 +341,84 @@ namespace RadClouds
             FrameState out{};
             if (!graphicsState || !sky) return out;
 
-            const auto& viewData = graphicsState->cameraState.camViewData;
-            std::memcpy(&out.invViewProj, &viewData.viewProjMat, sizeof(out.invViewProj));
-            DirectX::XMMATRIX vp = DirectX::XMLoadFloat4x4(&out.invViewProj);
-            DirectX::XMVECTOR det = DirectX::XMVectorZero();
-            const DirectX::XMMATRIX invVp = DirectX::XMMatrixInverse(&det, vp);
-            DirectX::XMStoreFloat4x4(&out.invViewProj, invVp);
-            if (!std::isfinite(DirectX::XMVectorGetX(det)) || std::abs(DirectX::XMVectorGetX(det)) < 1e-12f) return out;
+            const RE::BSGraphics::ViewData* candidates[3]{};
+            const RE::NiPoint3* adjusts[3]{};
+            const char* names[3]{};
+            candidates[0] = &graphicsState->cameraState.camViewData;
+            adjusts[0] = &graphicsState->cameraState.posAdjust;
+            names[0] = "State::cameraState";
+            const auto* rendererData = RE::BSGraphics::GetRendererData();
+            if (rendererData && rendererData->shadowState) {
+                candidates[1] = &rendererData->shadowState->cameraData;
+                adjusts[1] = &rendererData->shadowState->posAdjust;
+                names[1] = "RendererData::shadowState";
+            }
+            if (!graphicsState->cameraDataCache.empty()) {
+                const auto& last = graphicsState->cameraDataCache.back();
+                candidates[2] = &last.camViewData;
+                adjusts[2] = &last.posAdjust;
+                names[2] = "cameraDataCache::back";
+            }
 
-            DirectX::XMFLOAT4X4 view{};
-            std::memcpy(&view, &viewData.viewMat, sizeof(view));
-            const DirectX::XMMATRIX invView = DirectX::XMMatrixInverse(nullptr, DirectX::XMLoadFloat4x4(&view));
-            DirectX::XMFLOAT4X4 invViewF{};
-            DirectX::XMStoreFloat4x4(&invViewF, invView);
-            out.cameraPos = { invViewF._41, invViewF._42, invViewF._43 };
+            const auto finite4 = [](const DirectX::XMFLOAT4& v) {
+                return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) && std::isfinite(v.w);
+            };
+            const auto finiteMatrix = [&](const DirectX::XMFLOAT4X4& m) {
+                for (int r = 0; r < 4; ++r)
+                    if (!finite4({ m.m[r][0], m.m[r][1], m.m[r][2], m.m[r][3] })) return false;
+                return true;
+            };
 
-            DirectX::XMFLOAT4X4 proj{};
-            std::memcpy(&proj, &viewData.projMat, sizeof(proj));
-            out.reversedDepth = proj._33 <= 0.0f;
-            out.nearZ = out.reversedDepth ? 1.0f : 0.0f;
-            out.farZ = out.reversedDepth ? 0.0f : 1.0f;
+            for (int i = 0; i < 3 && !out.hadMatrix; ++i) {
+                if (!candidates[i]) continue;
+                DirectX::XMFLOAT4X4 vpRaw{};
+                std::memcpy(&vpRaw, &candidates[i]->viewProjMat, sizeof(vpRaw));
+                if (!finiteMatrix(vpRaw)) continue;
+                const float row0 = std::abs(vpRaw._11) + std::abs(vpRaw._12) + std::abs(vpRaw._13) + std::abs(vpRaw._14);
+                if (row0 < 1e-6f) continue;
+
+                DirectX::XMVECTOR det = DirectX::XMVectorZero();
+                const DirectX::XMMATRIX invVp = DirectX::XMMatrixInverse(&det, DirectX::XMLoadFloat4x4(&vpRaw));
+                DirectX::XMFLOAT4X4 invVpF{};
+                DirectX::XMStoreFloat4x4(&invVpF, invVp);
+                if (!finiteMatrix(invVpF)) continue;
+                const float detScalar = DirectX::XMVectorGetX(det);
+                if (!std::isfinite(detScalar)) continue;
+
+                DirectX::XMFLOAT4X4 viewRaw{};
+                std::memcpy(&viewRaw, &candidates[i]->viewMat, sizeof(viewRaw));
+                if (!finiteMatrix(viewRaw)) continue;
+                const DirectX::XMMATRIX invView = DirectX::XMMatrixInverse(nullptr, DirectX::XMLoadFloat4x4(&viewRaw));
+                DirectX::XMFLOAT4X4 invViewF{};
+                DirectX::XMStoreFloat4x4(&invViewF, invView);
+                if (!finiteMatrix(invViewF)) continue;
+
+                DirectX::XMFLOAT4X4 projRaw{};
+                std::memcpy(&projRaw, &candidates[i]->projMat, sizeof(projRaw));
+                out.reversedDepth = finiteMatrix(projRaw) && projRaw._33 <= 0.0f;
+                out.nearZ = out.reversedDepth ? 1.0f : 0.0f;
+                out.farZ = out.reversedDepth ? 0.0f : 1.0f;
+                out.invViewProj = invVpF;
+                const auto& pa = *adjusts[i];
+                out.posAdjust = { pa.x, pa.y, pa.z };
+                out.cameraPos = { invViewF._41 + pa.x, invViewF._42 + pa.y, invViewF._43 + pa.z };
+                out.matrixSample[0] = vpRaw._11; out.matrixSample[1] = vpRaw._12;
+                out.matrixSample[2] = vpRaw._13; out.matrixSample[3] = vpRaw._14;
+                out.sourceName = names[i];
+                out.hadMatrix = true;
+            }
+            if (!out.hadMatrix) {
+                DirectX::XMFLOAT4X4 vpRaw{};
+                std::memcpy(&vpRaw, &graphicsState->cameraState.camViewData.viewProjMat, sizeof(vpRaw));
+                out.matrixSample[0] = vpRaw._11; out.matrixSample[1] = vpRaw._12;
+                out.matrixSample[2] = vpRaw._13; out.matrixSample[3] = vpRaw._14;
+                return out;
+            }
 
             if (sky->sun && sky->sun->sunBaseNode)
             {
                 const auto sunPos = sky->sun->sunBaseNode.get()->GetWorldTranslate();
-                const auto& posAdjust = graphicsState->cameraState.posAdjust;
-                DirectX::XMFLOAT3 dir{ (sunPos.x - posAdjust.x) - out.cameraPos.x,
-                    (sunPos.y - posAdjust.y) - out.cameraPos.y,
-                    (sunPos.z - posAdjust.z) - out.cameraPos.z };
+                DirectX::XMFLOAT3 dir{ sunPos.x - out.cameraPos.x, sunPos.y - out.cameraPos.y, sunPos.z - out.cameraPos.z };
                 const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
                 if (len > 1.0f) {
                     out.sunDir = { dir.x / len, dir.y / len, dir.z / len };
@@ -555,7 +611,7 @@ namespace RadClouds
             cb.windAndTime = { frame.windAngle, frame.windSpeed, frame.time, frame.coverage };
             cb.params0 = { cfg.layerBottom, cfg.layerTop, cfg.density, static_cast<float>(cfg.steps) };
             cb.params1 = { cfg.maxDistance, cfg.noiseScale, frame.flash, cfg.blendAlpha };
-            cb.params2 = { frame.farZ, frame.nearZ, frame.farZ, 0.0f };
+            cb.params2 = { frame.farZ, frame.nearZ, frame.farZ, static_cast<float>(cfg.debugMode) };
 
             const D3D11_MAPPED_SUBRESOURCE mapped = [&]() {
                 D3D11_MAPPED_SUBRESOURCE m{};
@@ -572,7 +628,8 @@ namespace RadClouds
             const bool useDepth = dsv != nullptr;
             if (dsv) dsv->Release();
             const bool reversed = cfg.depthMode == 2 || (cfg.depthMode == 0 && frame.reversedDepth);
-            ID3D11DepthStencilState* depthState = !useDepth ? g_depthNone : (reversed ? g_depthReversed : g_depthStandard);
+            const bool noDepth = !useDepth || cfg.depthMode == 3 || cfg.debugMode != 0;
+            ID3D11DepthStencilState* depthState = noDepth ? g_depthNone : (reversed ? g_depthReversed : g_depthStandard);
             if (!useDepth && !g_loggedNoDepth) {
                 g_loggedNoDepth = true;
                 if (auto logger = Logger()) logger->warn("[Clouds] No depth bound at sky pass; drawing without depth test.");
@@ -720,7 +777,8 @@ namespace RadClouds
                 ++g_skipGather;
                 if (!g_gatherLogged) {
                     g_gatherLogged = true;
-                    if (logger) logger->warn("[Clouds] Frame state invalid (matrix/camera); clouds skipped.");
+                    if (logger) logger->warn("[Clouds] Frame state invalid: viewProj row0 = [{:.4f}, {:.4f}, {:.4f}, {:.4f}]; all camera sources failed.",
+                        state.matrixSample[0], state.matrixSample[1], state.matrixSample[2], state.matrixSample[3]);
                 }
                 return;
             }
@@ -730,9 +788,10 @@ namespace RadClouds
             g_lastFrame = frame;
             if (!g_firstDrawLogged) {
                 g_firstDrawLogged = true;
-                if (logger) logger->info("[Clouds] First draw: target {}x{} skyObjectType={} layer={}/{} sunDir=({:.2f},{:.2f},{:.2f}) coverage={:.2f} reversedDepth={} depthMode={}.",
+                if (logger) logger->info("[Clouds] First draw: target {}x{} skyObjectType={} layer={}/{} source={} cam=({:.0f},{:.0f},{:.0f}) sunDir=({:.2f},{:.2f},{:.2f}) coverage={:.2f} reversedDepth={} depthMode={} debugMode={}.",
                     target.width, target.height, passInfo.skyObjectType, passInfo.layer, passInfo.numLayers,
-                    state.sunDir.x, state.sunDir.y, state.sunDir.z, state.coverage, state.reversedDepth, cfg.depthMode);
+                    state.sourceName ? state.sourceName : "?", state.cameraPos.x, state.cameraPos.y, state.cameraPos.z,
+                    state.sunDir.x, state.sunDir.y, state.sunDir.z, state.coverage, state.reversedDepth, cfg.depthMode, cfg.debugMode);
             }
             if (callIndex % 600 == 0 && logger) {
                 logger->info("[Clouds] Stats: calls={} draws={} skipped(disabled={} mode={} pass={} target={} device={} gather={}) types[sun={} glare={} atmo={} clouds={} skyquad={} stars={} moon={} shadow={} other={}] fallback={}.",

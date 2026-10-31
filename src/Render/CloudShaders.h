@@ -116,7 +116,7 @@ float Fbm(float3 p, int octaves)
 
 float Billow(float3 p)
 {
-    float n = Fbm(p, 4);
+    float n = Fbm(p, 3);
     return 1.0 - abs(n * 2.0 - 1.0);
 }
 
@@ -134,7 +134,7 @@ float LayerDensity(float3 p, float bottom, float top, float coverage, float scal
     q += float3(warp, warp * 0.6, warp * 0.3) * 1.8;
 
     float billow = Billow(q);
-    float detail = Fbm(q * 3.4 + 21.0, 2);
+    float detail = Fbm(q * 1.7 + 21.0, 2);
     if (Params6.x > 0.5)
     {
         float3 uv = q * 0.55;
@@ -143,9 +143,9 @@ float LayerDensity(float3 p, float bottom, float top, float coverage, float scal
         billow = saturate(billow * 0.65 + saturate((n1.r * 0.6 + n1.g * 0.4 - 0.2) * 2.0) * 0.35);
         detail = saturate(detail * 0.5 + n2.b * 0.5);
     }
-    float n = billow * 0.78 + detail * 0.22;
+    float n = saturate((billow * 0.85 + detail * 0.15 - 0.30) * 2.2);
 
-    float threshold = lerp(0.78, 0.26, saturate(coverage));
+    float threshold = lerp(0.75, 0.25, saturate(coverage));
     float d = max(0.0, n - threshold) / max(1.0 - threshold, 1e-4);
     d = saturate(d) * saturate(d + 0.25);
 
@@ -173,7 +173,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
 
     float4 nearH = mul(float4(ndc, Params2.y, 1.0), InvViewProj);
     float4 farH = mul(float4(ndc, Params2.z, 1.0), InvViewProj);
-    if (abs(nearH.w) < 1e-6 || abs(farH.w) < 1e-6)
+    if (any(isnan(nearH)) || any(isnan(farH)) || abs(nearH.w) < 1e-12 || abs(farH.w) < 1e-12)
         discard;
     float3 nearP = nearH.xyz / nearH.w;
     float3 farP = farH.xyz / farH.w;
@@ -221,7 +221,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     [loop]
     for (int i = 0; i < steps; ++i)
     {
-        float t = t0 + stepLen * ((float)i + 0.5 + (pixDither - 0.5));
+        float t = t0 + stepLen * ((float)i + 0.5 + (pixDither - 0.5) * 0.5);
         float3 p = origin + dir * t;
         float density = SampleDensity(p);
         if (density > 1e-5)
@@ -253,7 +253,9 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     }
 
     float edgeFade = 1.0 - smoothstep(Params1.x * 0.6, Params1.x, t1);
-    float alpha = saturate((1.0 - transmittance) * Params1.w * edgeFade * (1.0 + (pixDither - 0.5) * 0.005));
+    float slabThickness = max(Params0.y - Params0.x, 1.0);
+    float grazingFade = smoothstep(0.0, 0.12, (t1 - t0) / slabThickness);
+    float alpha = saturate((1.0 - transmittance) * Params1.w * edgeFade * grazingFade * (1.0 + (pixDither - 0.5) * 0.005));
     if (alpha <= 0.002)
         discard;
 

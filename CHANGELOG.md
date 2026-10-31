@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.1 - unprojection guard
+
+- Fixed a fatal ray-setup bug found with a headless D3D11 render of `kCloudPS`: far-plane unprojection has
+  homogeneous `w` about `1 / farPlane` (1e-6 for a 2,000,000-unit far plane), and the old
+  `abs(w) < 1e-6 -> discard` guard therefore discarded every pixel, so no density, step or jitter change
+  could ever be visible. The guard is now `isnan` plus `1e-12`, and the raymarch renders again (offline:
+  mean alpha 0.14, max 0.36, 61% non-zero coverage at 35 degrees pitch). Remaining offline finding:
+  the density field is still per-pixel speckle instead of coherent cloud shapes, and the slab edge is a
+  hard circular boundary; both are the next work item, not fixed here.
+
 Engine notes in this file are concept-level unless a release entry says they were verified in game.
 
 ## v0.7.0 - game units, extinction, sky clipping, dithering

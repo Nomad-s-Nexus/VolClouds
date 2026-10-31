@@ -118,6 +118,10 @@ namespace RadClouds
         bool g_deviceLogged{ false };
         bool g_gatherLogged{ false };
         bool g_firstDrawLogged{ false };
+        bool g_firstCloudPassLogged{ false };
+        bool g_fallbackLogged{ false };
+        bool g_fallbackMode{ false };
+        std::uint32_t g_skyTypeCounts[16]{};
         void* g_failedDevice{ nullptr };
         std::chrono::steady_clock::time_point g_startTime{};
         REL::Relocation<SetupGeometryFn> g_original;
@@ -597,7 +601,7 @@ namespace RadClouds
             std::uint32_t numLayers{ 0 };
         };
 
-        bool IsLastCloudLayerPass(void* a_pass, const RE::Sky* sky, CloudPassInfo* outInfo)
+        bool IsCloudPass(void* a_pass, const RE::Sky* sky, CloudPassInfo* outInfo)
         {
             if (!a_pass) return false;
             auto* property = *reinterpret_cast<void**>(reinterpret_cast<char*>(a_pass) + 0x10);
@@ -608,10 +612,7 @@ namespace RadClouds
             const auto numLayers = clouds ? *reinterpret_cast<const std::uint16_t*>(reinterpret_cast<const char*>(clouds) + 0x510) : 0;
             if (outInfo)
                 *outInfo = { true, static_cast<int>(skyObjectType), static_cast<std::uint32_t>(layer), static_cast<std::uint32_t>(numLayers) };
-            if (skyObjectType != 3) return false;
-            if (!clouds) return true;
-            if (numLayers == 0) return true;
-            return layer + 1 >= numLayers;
+            return skyObjectType == 3;
         }
 
         void Hook_SetupGeometry(void* a_shader, void* a_pass)
@@ -658,14 +659,35 @@ namespace RadClouds
             }
 
             CloudPassInfo passInfo{};
-            if (!IsLastCloudLayerPass(a_pass, sky, &passInfo)) {
+            const bool isCloudPass = IsCloudPass(a_pass, sky, &passInfo);
+            if (passInfo.hasProperty && passInfo.skyObjectType >= 0 && passInfo.skyObjectType < 16)
+                ++g_skyTypeCounts[passInfo.skyObjectType];
+
+            if (isCloudPass && !g_firstCloudPassLogged) {
+                g_firstCloudPassLogged = true;
+                if (logger) logger->info("[Clouds] First cloud pass: layer={} numLayers={} techniqueAccepted=true.",
+                    passInfo.layer, passInfo.numLayers);
+            }
+
+            if (!isCloudPass) {
                 ++g_skipPass;
                 if (!g_passLogged) {
                     g_passLogged = true;
-                    if (logger) logger->info("[Clouds] Waiting for last cloud layer: hasProperty={} skyObjectType={} layer={}/{}.",
+                    if (logger) logger->info("[Clouds] Non-cloud sky pass: hasProperty={} skyObjectType={} layer={}/{}; waiting for a cloud pass.",
                         passInfo.hasProperty, passInfo.skyObjectType, passInfo.layer, passInfo.numLayers);
                 }
-                return;
+                const bool allowFallback = g_fallbackMode && (passInfo.skyObjectType == 2 || passInfo.skyObjectType == 4);
+                if (!allowFallback) {
+                    if (!g_fallbackMode && !g_firstCloudPassLogged && callIndex > 240) {
+                        g_fallbackMode = true;
+                        if (logger) logger->warn("[Clouds] No cloud pass observed after {} hook calls; falling back to sky-quad/atmosphere pass.", callIndex);
+                    }
+                    return;
+                }
+                if (!g_fallbackLogged) {
+                    g_fallbackLogged = true;
+                    if (logger) logger->info("[Clouds] Fallback pass in use (skyObjectType={}).", passInfo.skyObjectType);
+                }
             }
 
             if (!g_vs || !g_ps || !g_cb) {
@@ -708,13 +730,15 @@ namespace RadClouds
             g_lastFrame = frame;
             if (!g_firstDrawLogged) {
                 g_firstDrawLogged = true;
-                if (logger) logger->info("[Clouds] First draw: target {}x{} sunDir=({:.2f},{:.2f},{:.2f}) coverage={:.2f} reversedDepth={} depthMode={}.",
-                    target.width, target.height, state.sunDir.x, state.sunDir.y, state.sunDir.z,
-                    state.coverage, state.reversedDepth, cfg.depthMode);
+                if (logger) logger->info("[Clouds] First draw: target {}x{} skyObjectType={} layer={}/{} sunDir=({:.2f},{:.2f},{:.2f}) coverage={:.2f} reversedDepth={} depthMode={}.",
+                    target.width, target.height, passInfo.skyObjectType, passInfo.layer, passInfo.numLayers,
+                    state.sunDir.x, state.sunDir.y, state.sunDir.z, state.coverage, state.reversedDepth, cfg.depthMode);
             }
             if (callIndex % 600 == 0 && logger) {
-                logger->info("[Clouds] Stats: calls={} draws={} skipped(disabled={} mode={} pass={} target={} device={} gather={}).",
-                    g_hookCalls, g_draws, g_skipDisabled, g_skipMode, g_skipPass, g_skipTarget, g_skipDevice, g_skipGather);
+                logger->info("[Clouds] Stats: calls={} draws={} skipped(disabled={} mode={} pass={} target={} device={} gather={}) types[sun={} glare={} atmo={} clouds={} skyquad={} stars={} moon={} shadow={} other={}] fallback={}.",
+                    g_hookCalls, g_draws, g_skipDisabled, g_skipMode, g_skipPass, g_skipTarget, g_skipDevice, g_skipGather,
+                    g_skyTypeCounts[0], g_skyTypeCounts[1], g_skyTypeCounts[2], g_skyTypeCounts[3], g_skyTypeCounts[4],
+                    g_skyTypeCounts[5], g_skyTypeCounts[6], g_skyTypeCounts[7], g_skyTypeCounts[8], g_fallbackMode);
             }
         }
     }

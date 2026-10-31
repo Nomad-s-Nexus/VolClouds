@@ -787,7 +787,7 @@ namespace RadClouds
             cb.params9 = g_hasPrevCloud ? g_prevRows[2] : DirectX::XMFLOAT4{ 0, 0, 0, 0 };
             cb.params10 = { g_hasPrevCloud ? cfg.temporalBlend : 0.0f, 1.0f, cfg.fogCoupling, cfg.sunShafts };
             cb.params11 = { frame.cameraPos.x, frame.cameraPos.y, cfg.shadowExtent, 128.0f };
-            cb.params12 = { cfg.shadowStrength, 0.0f, frame.reversedDepth ? 1.0f : 0.0f, static_cast<float>(cfg.shadowDebug) };
+            cb.params12 = { cfg.shadowStrength, cfg.compositeDepthEpsilon, frame.reversedDepth ? 1.0f : 0.0f, static_cast<float>(cfg.shadowDebug) };
             cb.params13 = g_hasPrevCloud ? g_prevRow3 : DirectX::XMFLOAT4{ 0, 0, 0, 0 };
             const D3D11_MAPPED_SUBRESOURCE mapped = [&]() {
                 D3D11_MAPPED_SUBRESOURCE m{};
@@ -864,13 +864,28 @@ namespace RadClouds
             ctx->RSSetViewports(1, &savedViewport);
             ctx->OMSetRenderTargets(1, &mainRTV, mainDSV);
             ID3D11ShaderResourceView* compositeSRVs[2]{ g_cloudSRV[current], g_cloudSRV[previous] };
+            ID3D11ShaderResourceView* compositeDepth = DepthSRVFrom(ctx, mainDSV);
+            if (!compositeDepth) {
+                if (void* mapped = [&]() -> void* {
+                        D3D11_MAPPED_SUBRESOURCE m{};
+                        if (ctx->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m) < 0) return nullptr;
+                        cb.params12.y = 0.0f;
+                        std::memcpy(m.pData, &cb, sizeof(cb));
+                        ctx->Unmap(g_cb, 0);
+                        return m.pData;
+                    }())
+                    (void)mapped;
+            }
             ctx->PSSetShader(g_compositePS, nullptr, 0);
             ctx->PSSetShaderResources(0, 2, compositeSRVs);
+            ctx->PSSetShaderResources(4, 1, &compositeDepth);
             ctx->PSSetSamplers(0, 1, &g_clampSampler);
             ctx->OMSetBlendState(g_blend, nullptr, 0xFFFFFFFF);
-            ctx->OMSetDepthStencilState(depthState, 0);
+            ctx->OMSetDepthStencilState(g_depthNone, 0);
             ctx->RSSetState(g_raster);
             ctx->Draw(3, 0);
+            ID3D11ShaderResourceView* nullDepth = nullptr;
+            ctx->PSSetShaderResources(4, 1, &nullDepth);
             if (cfg.cloudShadows && g_shadowReady) {
                 ID3D11ShaderResourceView* depthSRV = DepthSRVFrom(ctx, mainDSV);
                 if (depthSRV && g_shadowMaskSRV) {

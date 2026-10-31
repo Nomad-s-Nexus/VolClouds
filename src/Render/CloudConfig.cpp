@@ -47,6 +47,7 @@ namespace RadClouds
             read("fClearCoverageScale", cfg.clearCoverageScale);
             read("fSunsetWarmth", cfg.sunsetWarmth);
             read("bCloudShadows", cfg.cloudShadows);
+            read("fCompositeDepthEpsilon", cfg.compositeDepthEpsilon);
             read("fCloudShadowStrength", cfg.shadowStrength);
             read("fCloudShadowExtent", cfg.shadowExtent);
             read("iCloudShadowDebug", cfg.shadowDebug);

@@ -210,8 +210,8 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     float3 scattered = float3(0.0, 0.0, 0.0);
     float3 sunDir = normalize(SunDir.xyz);
     float cosSun = dot(dir, sunDir);
-    float phase = HenyeyGreenstein(cosSun, Params4.x) * 1.2;
-    float phase2 = HenyeyGreenstein(cosSun, -0.25) * 0.2;
+    float phase = 1.0;
+    float phase2 = 0.0;
     float flash = Params1.z;
     float3 ambientSky = AmbientColor.rgb;
     float3 sunTint = SunColor.rgb * SunDir.w;
@@ -219,7 +219,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     [loop]
     for (int i = 0; i < steps; ++i)
     {
-        float t = t0 + stepLen * ((float)i + 0.5);
+        float t = t0 + stepLen * ((float)i + 0.5 + stepOffset);
         float3 p = origin + dir * t;
         float density = SampleDensity(p);
         if (density > 1e-5)
@@ -236,8 +236,10 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
             float beer2 = exp(-lightDepth * 0.25);
             float powder = (1.0 - exp(-density * 900.0)) * (1.0 - exp(-density * 900.0));
             float powderTerm = lerp(1.0, powder, Params4.y);
+            float dither = frac(sin(dot(ndc + float2((float)i * 0.7548777, (float)i * 0.5698403), float2(12.9898, 78.233))) * 43758.5453);
+            float stepOffset = (dither - 0.5) * 0.9;
             float3 lightCol = ambientSky * Params4.z
-                + sunTint * (beer * (phase * 0.7 + phase2) + beer2 * 0.25) * powderTerm;
+                + sunTint * (beer * 0.55 + beer2 * 0.25) * powderTerm;
 
             float extinction = exp(-density * stepLen);
             float alpha = 1.0 - extinction;
@@ -248,7 +250,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
         }
     }
 
-    float alpha = saturate((1.0 - transmittance) * Params1.w);
+    float alpha = saturate((1.0 - transmittance) * Params1.w * (1.0 + (dither - 0.5) * 0.02));
     if (alpha <= 0.002)
         discard;
 

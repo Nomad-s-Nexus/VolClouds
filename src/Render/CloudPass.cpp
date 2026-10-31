@@ -336,9 +336,9 @@ namespace RadClouds
                 coverage = std::max(coverage, weather->cloudAlpha[i][1]);  // ColorTime::kDay
             }
             const auto flags = static_cast<std::uint8_t>(weather->weatherData[0xB]);  // WeatherData::kFlags
-            if (flags & 0x2) coverage = std::max(coverage, 0.60f);  // cloudy
-            if (flags & 0x4) coverage = std::max(coverage, 0.85f);  // rainy
-            if (flags & 0x8) coverage = std::max(coverage, 0.90f);  // snow
+            if (flags & 0x2) coverage = std::max(coverage, 0.45f);  // cloudy
+            if (flags & 0x4) coverage = std::max(coverage, 0.65f);  // rainy
+            if (flags & 0x8) coverage = std::max(coverage, 0.70f);  // snow
             return std::clamp(coverage, 0.0f, 1.0f);
         }
 
@@ -421,16 +421,21 @@ namespace RadClouds
                 return out;
             }
 
-            if (sky->sun && sky->sun->sunBaseNode)
+            if (sky->sun && sky->sun->light)
             {
-                const auto sunPos = sky->sun->sunBaseNode.get()->GetWorldTranslate();
-                DirectX::XMFLOAT3 dir{ sunPos.x - out.cameraPos.x, sunPos.y - out.cameraPos.y, sunPos.z - out.cameraPos.z };
+                // TODO-verify light axis convention; force above-horizon like the engine does.
+                const auto* lightNode = reinterpret_cast<const RE::NiAVObject*>(sky->sun->light.get());
+                const auto& rot = lightNode->GetWorldRotate();
+                DirectX::XMFLOAT3 dir{ -rot[0][2], -rot[1][2], -rot[2][2] };
+                if (dir.z < 0.0f) {
+                    dir.x = -dir.x; dir.y = -dir.y; dir.z = -dir.z;
+                }
                 const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-                if (len > 1.0f) {
+                if (len > 1e-4f) {
                     out.sunDir = { dir.x / len, dir.y / len, dir.z / len };
                 }
             }
-            else
+            if (out.sunDir.z <= 0.01f)
             {
                 const float hour = std::clamp(sky->currentGameHour, 0.0f, 24.0f);
                 const float angle = (hour - 6.0f) / 12.0f * DirectX::XM_PI;
@@ -440,18 +445,19 @@ namespace RadClouds
             }
 
             const float dayBase = std::clamp(out.sunDir.z * 1.6f + 0.25f, 0.05f, 1.0f);
+            out.sunDir.z = std::max(out.sunDir.z, 0.15f);
             const RE::NiColor sunTint = sky->skyColor[4];  // ColorType::kSunlight
             const RE::NiColor skyUpper = sky->skyColor[0];
             out.sunColor = { std::max(sunTint.r, 0.15f) * dayBase, std::max(sunTint.g, 0.15f) * dayBase,
                 std::max(sunTint.b, 0.15f) * dayBase };
             out.sunIntensity = cfg.sunIntensity * dayBase;
-            const float ambientScale = 0.35f + cfg.ambient;
+            const float ambientScale = 0.9f + cfg.ambient * 2.0f;
             out.ambientColor = { std::max(skyUpper.r, 0.05f) * ambientScale, std::max(skyUpper.g, 0.06f) * ambientScale, std::max(skyUpper.b, 0.08f) * ambientScale };
 
             const float pct = std::clamp(sky->currentWeatherPct, 0.0f, 1.0f);
             const float currentCoverage = WeatherCoverage(sky->currentWeather);
             const float lastCoverage = sky->lastWeather ? WeatherCoverage(sky->lastWeather) : currentCoverage;
-            out.coverage = std::clamp((lastCoverage + (currentCoverage - lastCoverage) * pct) * cfg.coverageScale, 0.0f, 1.0f);
+            out.coverage = std::clamp((lastCoverage + (currentCoverage - lastCoverage) * pct) * cfg.coverageScale, 0.0f, 0.92f);
 
             out.windAngle = sky->windAngle;
             out.windSpeed = sky->windSpeed * cfg.windDrift;

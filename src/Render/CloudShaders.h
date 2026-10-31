@@ -94,7 +94,7 @@ float DensityAt(float3 p, float bottom, float top)
     float coverage = saturate(WindAndTime.w);
     float threshold = lerp(0.78, 0.30, coverage);
     float d = max(0.0, n - threshold) / max(1.0 - threshold, 1e-4);
-    return d * profile * Params0.z;
+    return d * profile * Params0.z * 0.00035;
 }
 
 float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target

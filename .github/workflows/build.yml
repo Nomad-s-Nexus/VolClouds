@@ -73,3 +73,31 @@ jobs:
           path: build/release/VolClouds.dll
           if-no-files-found: error
           retention-days: 14
+
+  noise-volume:
+    name: Noise volume reproducibility
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install numpy
+        shell: pwsh
+        run: python -m pip install --quiet numpy
+
+      - name: Verify committed noise DDS is reproducible
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $before = (Get-FileHash 'data/cloudnoise.dds' -Algorithm SHA256).Hash.ToLower()
+          python tools/gen_cloud_noise.py
+          $after = (Get-FileHash 'data/cloudnoise.dds' -Algorithm SHA256).Hash.ToLower()
+          if ($before -ne $after) { throw "committed noise DDS is stale: $before -> $after (re-run tools/gen_cloud_noise.py and commit the result)" }
+          Write-Host "noise volume reproducible: $after"

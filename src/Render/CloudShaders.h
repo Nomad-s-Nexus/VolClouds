@@ -119,26 +119,19 @@ float LayerDensity(float3 p, float bottom, float top, float coverage, float scal
     float warp = Fbm(q * 0.55 + 3.1, 2);
     q += float3(warp, warp * 0.6, warp * 0.3) * 1.8;
 
-    float billow;
-    float detail;
+    float billow = Billow(q);
+    float detail = Fbm(q * 3.4 + 21.0, 2);
     if (Params6.x > 0.5)
     {
         float3 uv = q * 0.55;
         float3 n1 = CloudNoise.SampleLevel(LinearWrapSampler, uv, 0).rgb;
         float3 n2 = CloudNoise.SampleLevel(LinearWrapSampler, uv * 2.7 + 0.31, 0).rgb;
-        billow = saturate(n1.r * 0.62 + n1.g * 0.38);
-        detail = saturate(n2.b * 0.65 + n2.g * 0.35);
-        billow = saturate((billow - 0.28) * 2.4);
-        detail = saturate((detail - 0.32) * 1.9);
-    }
-    else
-    {
-        billow = Billow(q);
-        detail = Fbm(q * 3.4 + 21.0, 2);
+        billow = saturate(billow * 0.65 + saturate((n1.r * 0.6 + n1.g * 0.4 - 0.2) * 2.0) * 0.35);
+        detail = saturate(detail * 0.5 + n2.b * 0.5);
     }
     float n = billow * 0.78 + detail * 0.22;
 
-    float threshold = lerp(0.86, 0.42, saturate(coverage));
+    float threshold = lerp(0.80, 0.30, saturate(coverage));
     float d = max(0.0, n - threshold) / max(1.0 - threshold, 1e-4);
     d = saturate(d) * saturate(d + 0.25);
 

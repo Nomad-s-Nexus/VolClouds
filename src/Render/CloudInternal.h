@@ -1,6 +1,19 @@
 #pragma once
 #include "pch.h"
 #include <RE/Fallout.h>
+#ifdef MEM_RELEASE
+#undef MEM_RELEASE
+#endif
+#ifdef constant
+#undef constant
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#include <d3d11.h>
+#include <dxgi.h>
+#include <d3dcompiler.h>
 #include <DirectXMath.h>
 #include <chrono>
 #include <cstdint>

@@ -205,6 +205,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
 
     int steps = (int)clamp(Params0.w, 8.0, 64.0);
     float stepLen = (t1 - t0) / (float)steps;
+    float pixDither = frac(sin(dot(ndc, float2(12.9898, 78.233))) * 43758.5453);
 
     float transmittance = 1.0;
     float3 scattered = float3(0.0, 0.0, 0.0);
@@ -219,6 +220,8 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     [loop]
     for (int i = 0; i < steps; ++i)
     {
+        float dither = frac(sin(dot(ndc + float2((float)i * 0.7548777, (float)i * 0.5698403), float2(12.9898, 78.233))) * 43758.5453);
+        float stepOffset = (dither - 0.5) * 0.9;
         float t = t0 + stepLen * ((float)i + 0.5 + stepOffset);
         float3 p = origin + dir * t;
         float density = SampleDensity(p);
@@ -236,8 +239,6 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
             float beer2 = exp(-lightDepth * 0.25);
             float powder = (1.0 - exp(-density * 900.0)) * (1.0 - exp(-density * 900.0));
             float powderTerm = lerp(1.0, powder, Params4.y);
-            float dither = frac(sin(dot(ndc + float2((float)i * 0.7548777, (float)i * 0.5698403), float2(12.9898, 78.233))) * 43758.5453);
-            float stepOffset = (dither - 0.5) * 0.9;
             float3 lightCol = ambientSky * Params4.z
                 + sunTint * (beer * 0.55 + beer2 * 0.25) * powderTerm;
 
@@ -250,7 +251,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
         }
     }
 
-    float alpha = saturate((1.0 - transmittance) * Params1.w * (1.0 + (dither - 0.5) * 0.02));
+    float alpha = saturate((1.0 - transmittance) * Params1.w * (1.0 + (pixDither - 0.5) * 0.02));
     if (alpha <= 0.002)
         discard;
 

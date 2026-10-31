@@ -12,13 +12,13 @@ namespace RadClouds
         bool suppressSunGlare{ false };
         float density{ 1.6f };
         float coverageScale{ 1.0f };
-        float layerBottom{ 3500.0f };
-        float layerTop{ 9000.0f };
+        float layerBottom{ 245000.0f };
+        float layerTop{ 630000.0f };
         int steps{ 48 };
         float sunIntensity{ 2.5f };
         float ambient{ 0.22f };
         float windDrift{ 1.0f };
-        float maxDistance{ 400000.0f };
+        float maxDistance{ 2000000.0f };
         float blendAlpha{ 1.0f };
         float noiseScale{ 1.0f };
         int depthMode{ 0 };
@@ -36,8 +36,8 @@ namespace RadClouds
         float shadowStrength{ 0.45f };
         float shadowExtent{ 9000.0f };
         int shadowDebug{ 0 };
-        float layer2Bottom{ 7000.0f };
-        float layer2Top{ 11000.0f };
+        float layer2Bottom{ 490000.0f };
+        float layer2Top{ 700000.0f };
         float layer2Density{ 0.9f };
         float layer2Coverage{ 0.45f };
         float phaseG{ 0.65f };

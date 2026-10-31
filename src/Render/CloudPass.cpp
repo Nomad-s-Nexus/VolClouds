@@ -277,7 +277,6 @@ namespace RadClouds
             g_prevRow3 = { frame.viewProj._41, frame.viewProj._42, frame.viewProj._43, frame.viewProj._44 };
             g_hasPrevCloud = true;
             g_cloudIndex = previous;
-            ctx->Draw(3, 0);
         }
         struct CloudPassInfo
         {

@@ -128,7 +128,7 @@ float LayerDensity(float3 p, float bottom, float top, float coverage, float scal
 
     float2 windDir = float2(cos(WindAndTime.x), sin(WindAndTime.x)) * WindAndTime.y * 0.0025 * windSign;
     float3 wind = float3(windDir.x, windDir.y, 0.0) * WindAndTime.z;
-    float3 q = p * (0.0035 * Params1.y * scale) + wind;
+    float3 q = p * (0.00002 * Params1.y * scale) + wind;
 
     float warp = Fbm(q * 0.55 + 3.1, 2);
     q += float3(warp, warp * 0.6, warp * 0.3) * 1.8;
@@ -227,22 +227,24 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
         float density = SampleDensity(p);
         if (density > 1e-5)
         {
+            const float lightStep = max((Params0.y - Params0.x) * 0.25, 1.0);
             float lightDepth = 0.0;
             [unroll]
-            for (int j = 1; j <= 6; ++j)
+            for (int j = 1; j <= 4; ++j)
             {
-                lightDepth += SampleDensity(p + sunDir * (70.0 * (float)j));
+                lightDepth += SampleDensity(p + sunDir * (lightStep * (float)j));
             }
-            lightDepth *= 70.0;
+            lightDepth *= 0.25;
 
             float beer = exp(-lightDepth);
             float beer2 = exp(-lightDepth * 0.25);
-            float powder = (1.0 - exp(-density * 900.0)) * (1.0 - exp(-density * 900.0));
+            float powder = (1.0 - exp(-density * 30.0)) * (1.0 - exp(-density * 30.0));
             float powderTerm = lerp(1.0, powder, Params4.y);
             float3 lightCol = ambientSky * Params4.z
                 + sunTint * (beer * 0.55 + beer2 * 0.25) * powderTerm;
 
-            float extinction = exp(-density * stepLen);
+            const float sigma = density / max(Params0.y - Params0.x, 1.0);
+            float extinction = exp(-sigma * stepLen);
             float alpha = 1.0 - extinction;
             scattered += transmittance * alpha * lightCol;
             transmittance *= extinction;
@@ -259,7 +261,8 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     float horizon = exp(-t0 / max(Params4.w, 1.0));
     float storm = saturate(Params5.x);
     float3 color = scattered;
-    color = lerp(color, ambientSky, saturate((1.0 - horizon) * 0.35));
+    const float ambientMix = saturate((1.0 - horizon) * 0.35);
+    color = color * (1.0 - ambientMix) + ambientSky * (alpha * ambientMix);
     color *= lerp(1.0, 0.35, storm);
     color += sunTint * flash * 0.18;
     color = min(color, float3(4.0, 4.0, 4.0));
@@ -323,7 +326,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     col.rgb = min(col.rgb, float3(4.0, 4.0, 4.0));
     if (col.a <= 0.002)
         discard;
-    return float4(col.rgb * col.a, col.a);
+    return float4(col.rgb, col.a);
 }
 )";
     inline constexpr char kShadowMaskPS[] = R"(

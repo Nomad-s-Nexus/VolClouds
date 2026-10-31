@@ -123,7 +123,7 @@ float LayerDensity(float3 p, float bottom, float top, float coverage, float scal
     float detail;
     if (Params6.x > 0.5)
     {
-        float3 uv = q * 0.35;
+        float3 uv = q * 0.55;
         float3 n1 = CloudNoise.SampleLevel(LinearWrapSampler, uv, 0).rgb;
         float3 n2 = CloudNoise.SampleLevel(LinearWrapSampler, uv * 2.7 + 0.31, 0).rgb;
         billow = saturate(n1.r * 0.62 + n1.g * 0.38);
@@ -138,11 +138,11 @@ float LayerDensity(float3 p, float bottom, float top, float coverage, float scal
     }
     float n = billow * 0.78 + detail * 0.22;
 
-    float threshold = lerp(0.80, 0.30, saturate(coverage));
+    float threshold = lerp(0.86, 0.42, saturate(coverage));
     float d = max(0.0, n - threshold) / max(1.0 - threshold, 1e-4);
     d = saturate(d) * saturate(d + 0.25);
 
-    float verticalProfile = smoothstep(0.0, 0.18, height01) * (1.0 - smoothstep(0.55, 1.0, height01));
+    float verticalProfile = smoothstep(0.0, 0.10, height01) * (1.0 - smoothstep(0.30, 0.85, height01));
     return d * verticalProfile;
 }
 
@@ -219,11 +219,11 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
         {
             float lightDepth = 0.0;
             [unroll]
-            for (int j = 1; j <= 4; ++j)
+            for (int j = 1; j <= 6; ++j)
             {
-                lightDepth += SampleDensity(p + sunDir * (90.0 * (float)j));
+                lightDepth += SampleDensity(p + sunDir * (70.0 * (float)j));
             }
-            lightDepth *= 90.0;
+            lightDepth *= 70.0;
 
             float beer = exp(-lightDepth);
             float beer2 = exp(-lightDepth * 0.25);
@@ -251,6 +251,7 @@ float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
     color = lerp(color, ambientSky, saturate((1.0 - horizon) * 0.35));
     color *= lerp(1.0, 0.35, storm);
     color += sunTint * flash * 0.18;
+    color += sunTint * pow(saturate(cosSun), 6.0) * 0.10 * (1.0 - transmittance);
     return float4(color, alpha);
 }
 )";

@@ -120,15 +120,14 @@ namespace RadClouds
             bool hadMatrix{ false };
             float matrixSample[4]{};
         };
-
         using SetupGeometryFn = void (*)(void*, void*);
-
         std::mutex g_mutex;
         Config g_config;
         bool g_installed{ false };
         bool g_loggedNoDepth{ false };
         bool g_loggedTargetSkip{ false };
         std::uint32_t g_lastFrame{ 0xFFFFFFFFu };
+        void* g_lastTarget{ nullptr };
         std::uint64_t g_hookCalls{ 0 };
         std::uint64_t g_draws{ 0 };
         std::uint64_t g_skipDisabled{ 0 };
@@ -156,7 +155,6 @@ namespace RadClouds
         void* g_failedDevice{ nullptr };
         std::chrono::steady_clock::time_point g_startTime{};
         REL::Relocation<SetupGeometryFn> g_original;
-
         ID3D11Device* g_device{ nullptr };
         ID3D11VertexShader* g_vs{ nullptr };
         ID3D11PixelShader* g_ps{ nullptr };
@@ -168,12 +166,10 @@ namespace RadClouds
         ID3D11RasterizerState* g_raster{ nullptr };
         ID3D11ShaderResourceView* g_noiseSRV{ nullptr };
         ID3D11SamplerState* g_noiseSampler{ nullptr };
-
         std::shared_ptr<spdlog::logger> Logger()
         {
             return spdlog::get("VolClouds");
         }
-
         void LoadConfigLocked()
         {
             Config cfg{};
@@ -185,7 +181,6 @@ namespace RadClouds
                     logger->info("[Clouds] No config at '{}'; volumetric clouds disabled until enabled in that file.", kConfigPath);
                 return;
             }
-
             try
             {
                 std::ifstream file(kConfigPath);
@@ -235,7 +230,6 @@ namespace RadClouds
                     logger->error("[Clouds] Config '{}' failed to parse ({}); clouds disabled.", kConfigPath, ex.what());
             }
         }
-
         void ReleaseResources()
         {
             auto release = [](auto*& ptr) {
@@ -256,7 +250,6 @@ namespace RadClouds
             release(g_vs);
             g_device = nullptr;
         }
-
         bool CompileShaders(ID3D11Device* device)
         {
             ID3DBlob* vsBlob = nullptr;
@@ -642,6 +635,7 @@ namespace RadClouds
             std::uint32_t height{ 0 };
             std::uint32_t arraySize{ 0 };
             std::uint32_t samples{ 0 };
+            void* textureId{ nullptr };
         };
 
         bool IsMainSceneTarget(ID3D11DeviceContext* ctx, std::uint32_t expectedWidth, std::uint32_t expectedHeight, TargetInfo* outInfo)
@@ -660,8 +654,10 @@ namespace RadClouds
             D3D11_TEXTURE2D_DESC desc{};
             tex->GetDesc(&desc);
             tex->Release();
-            if (outInfo)
+            if (outInfo) {
                 *outInfo = { static_cast<std::uint32_t>(desc.Format), desc.Width, desc.Height, desc.ArraySize, desc.SampleDesc.Count };
+                outInfo->textureId = tex;
+            }
             if (desc.ArraySize > 1) return false;
             if (desc.SampleDesc.Count > 1) return false;
             if (desc.Format != DXGI_FORMAT_R11G11B10_FLOAT && desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) return false;
@@ -846,7 +842,6 @@ namespace RadClouds
             if (!graphicsState || !sky) return;
 
             const auto frame = graphicsState->frameID;
-            if (frame == g_lastFrame) return;
 
             const auto mode = SkyModeRaw(sky);
             if (mode != 2 && mode != 3) {
@@ -915,6 +910,8 @@ namespace RadClouds
                 return;
             }
 
+            if (frame == g_lastFrame && target.textureId == g_lastTarget) return;
+
             const FrameState state = GatherFrameState(graphicsState, sky, cfg);
             if (!state.valid) {
                 ++g_skipGather;
@@ -930,6 +927,7 @@ namespace RadClouds
             RenderClouds(ctx, state, cfg);
             ++g_draws;
             g_lastFrame = frame;
+            g_lastTarget = target.textureId;
             if (!g_firstDrawLogged) {
                 g_firstDrawLogged = true;
                 if (logger) logger->info("[Clouds] First draw: target {}x{} skyObjectType={} layer={}/{} source={} cam=({:.0f},{:.0f},{:.0f}) sunDir=({:.2f},{:.2f},{:.2f}) coverage={:.2f} reversedDepth={} depthMode={} debugMode={}.",

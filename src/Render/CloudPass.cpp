@@ -67,6 +67,7 @@ namespace RadClouds
             float noiseScale{ 1.0f };
             int depthMode{ 0 };  // 0 = auto, 1 = standard Z (LESS_EQUAL), 2 = reversed Z (GREATER_EQUAL), 3 = no depth test
             int debugMode{ 0 };
+            bool suppressVanillaClouds{ true };
             float layer2Bottom{ 7000.0f };
             float layer2Top{ 11000.0f };
             float layer2Density{ 0.9f };
@@ -143,6 +144,10 @@ namespace RadClouds
         bool g_deviceLogged{ false };
         bool g_gatherLogged{ false };
         bool g_firstDrawLogged{ false };
+        int g_debugOverride{ -1 };
+        int g_suppressOverride{ -1 };
+        bool g_hotkeyDebugDown{ false };
+        bool g_hotkeySuppressDown{ false };
         bool g_firstCloudPassLogged{ false };
         bool g_fallbackLogged{ false };
         bool g_fallbackMode{ false };
@@ -202,6 +207,7 @@ namespace RadClouds
                 read("fNoiseScale", cfg.noiseScale);
                 read("iDepthMode", cfg.depthMode);
                 read("iDebugMode", cfg.debugMode);
+                read("bSuppressVanillaClouds", cfg.suppressVanillaClouds);
                 read("fLayer2Bottom", cfg.layer2Bottom);
                 read("fLayer2Top", cfg.layer2Top);
                 read("fLayer2Density", cfg.layer2Density);
@@ -726,8 +732,54 @@ namespace RadClouds
 #endif
         }
 
+        void* SkyPropertyOfPass(void* a_pass)
+        {
+            if (!a_pass) return nullptr;
+            // TODO-verify BSRenderPass::pShaderProperty offset while no BSRenderPass header exists.
+            return *reinterpret_cast<void**>(reinterpret_cast<char*>(a_pass) + 0x10);
+        }
+
+        void PollHotkeys()
+        {
+            const bool debugDown = (::GetAsyncKeyState(VK_F10) & 0x8000) != 0;
+            const bool suppressDown = (::GetAsyncKeyState(VK_F11) & 0x8000) != 0;
+            auto logger = Logger();
+            if (debugDown && !g_hotkeyDebugDown) {
+                g_debugOverride = (g_debugOverride == 1) ? 0 : 1;
+                if (logger) logger->info("[Clouds] F10: debug full-screen override = {}.", g_debugOverride);
+            }
+            if (suppressDown && !g_hotkeySuppressDown) {
+                g_suppressOverride = (g_suppressOverride == 1) ? 0 : 1;
+                if (logger) logger->info("[Clouds] F11: vanilla cloud suppression = {}.", g_suppressOverride);
+            }
+            g_hotkeyDebugDown = debugDown;
+            g_hotkeySuppressDown = suppressDown;
+        }
+
         void Hook_SetupGeometry(void* a_shader, void* a_pass)
         {
+            Config cfg;
+            {
+                std::scoped_lock lock(g_mutex);
+                cfg = g_config;
+            }
+            PollHotkeys();
+            const int debugMode = g_debugOverride >= 0 ? g_debugOverride : cfg.debugMode;
+            const bool suppressVanilla = g_suppressOverride >= 0 ? (g_suppressOverride == 1) : cfg.suppressVanillaClouds;
+
+            if (cfg.enabled && suppressVanilla) {
+                if (void* property = SkyPropertyOfPass(a_pass)) {
+#if VOLCLOUDS_TYPED_SKY
+                    auto* skyProperty = reinterpret_cast<RE::BSSkyShaderProperty*>(property);
+                    if (skyProperty->skyObjectType == RE::BSSkyShaderProperty::SkyObject::kClouds)
+                        skyProperty->kBlendColor.a = 0.0f;
+#else
+                    if (*reinterpret_cast<const int*>(reinterpret_cast<const char*>(property) + 0xA8) == 3)
+                        *reinterpret_cast<float*>(reinterpret_cast<char*>(property) + 0x7C) = 0.0f;
+#endif
+                }
+            }
+
             if (g_original)
                 g_original(a_shader, a_pass);
 
@@ -738,11 +790,6 @@ namespace RadClouds
                 if (logger) logger->info("[Clouds] SetupGeometry hook fired (first call).");
             }
 
-            Config cfg;
-            {
-                std::scoped_lock lock(g_mutex);
-                cfg = g_config;
-            }
             if (!cfg.enabled) {
                 ++g_skipDisabled;
                 if (!g_disabledLogged) {
@@ -837,6 +884,7 @@ namespace RadClouds
                 return;
             }
 
+            cfg.debugMode = debugMode;
             RenderClouds(ctx, state, cfg);
             ++g_draws;
             g_lastFrame = frame;

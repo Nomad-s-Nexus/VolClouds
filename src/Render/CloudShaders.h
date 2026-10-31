@@ -143,7 +143,7 @@ float SampleDensity(float3 p)
 float4 main(float4 svPos : SV_Position, float2 ndc : TEXCOORD0) : SV_Target
 {
     if (Params2.w > 0.5 && Params2.w < 1.5)
-        return float4(0.8, 0.0, 0.8, 0.6);
+        return float4(0.85, 0.0, 0.85, 1.0);
 
     float4 nearH = mul(float4(ndc, Params2.y, 1.0), InvViewProj);
     float4 farH = mul(float4(ndc, Params2.z, 1.0), InvViewProj);

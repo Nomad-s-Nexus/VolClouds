@@ -161,10 +161,7 @@ namespace RadClouds
         {
             CloudConfig cfg{};
             const bool loaded = LoadCloudConfig(kCloudConfigPath, cfg);
-            {
-                std::scoped_lock lock(g_mutex);
-                g_config = cfg;
-            }
+            g_config = cfg;
             if (auto logger = Logger()) {
                 if (!loaded) {
                     logger->info("[Clouds] No config at '{}'; volumetric clouds disabled until enabled in that file.", kCloudConfigPath);

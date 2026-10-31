@@ -165,7 +165,7 @@ struct FrameState
     inline ID3D11Texture2D* g_probeReadback{ nullptr };
     inline std::uint32_t g_probeCounter{ 0 };
 
-    std::shared_ptr<spdlog::logger> Logger()
+    inline std::shared_ptr<spdlog::logger> Logger()
 {
     return spdlog::get("VolClouds");
 }

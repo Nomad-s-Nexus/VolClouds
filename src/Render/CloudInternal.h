@@ -29,6 +29,7 @@ namespace RadClouds
         constexpr std::size_t kSetupGeometryVTableSlot = 7;
         using Config = CloudConfig;
         using SetupGeometryFn = void (*)(void*, void*);
+
     struct alignas(16) CloudCB
 {
     DirectX::XMFLOAT4X4 invViewProj; DirectX::XMFLOAT4 cameraPos;
@@ -73,276 +74,7 @@ struct FrameState
     bool hadMatrix{ false };
     float matrixSample[4]{};
 };
-    inline std::mutex g_mutex;
-    inline Config g_config;
-    inline bool g_installed{ false };
-    inline bool g_loggedNoDepth{ false };
-    inline bool g_loggedTargetSkip{ false };
-    inline std::uint32_t g_lastFrame{ 0xFFFFFFFFu };
-    inline std::uint32_t g_frameBestArea{ 0 };
-    inline std::uint32_t g_frameDraws{ 0 };
-    inline std::uint32_t g_frameMainDraws{ 0 };
-    inline std::uint32_t g_frameSecondaryDraws{ 0 };
-    inline std::uint32_t g_frameSizes[4]{};
-    inline std::uint32_t g_loggedFrameDraws{ 0 };
-    inline void* g_lastTarget{ nullptr };
-    inline std::uint64_t g_hookCalls{ 0 };
-    inline std::uint64_t g_draws{ 0 };
-    inline std::uint64_t g_skipDisabled{ 0 };
-    inline std::uint64_t g_skipMode{ 0 };
-    inline std::uint64_t g_skipPass{ 0 };
-    inline std::uint64_t g_skipTarget{ 0 };
-    inline std::uint64_t g_skipDevice{ 0 };
-    inline std::uint64_t g_skipGather{ 0 };
-    inline bool g_firstHookLogged{ false };
-    inline bool g_disabledLogged{ false };
-    inline bool g_modeLogged{ false };
-    inline bool g_passLogged{ false };
-    inline bool g_targetLogged{ false };
-    inline bool g_deviceLogged{ false };
-    inline bool g_gatherLogged{ false };
-    inline bool g_firstDrawLogged{ false };
-    inline int g_debugOverride{ -1 };
-    inline int g_suppressOverride{ -1 };
-    inline bool g_hotkeyDebugDown{ false };
-    inline bool g_hotkeySuppressDown{ false };
-    inline bool g_firstCloudPassLogged{ false };
-    inline bool g_fallbackLogged{ false };
-    inline bool g_fallbackMode{ false };
-    inline std::uint32_t g_skyTypeCounts[16]{};
-    inline void* g_failedDevice{ nullptr };
-    inline std::chrono::steady_clock::time_point g_startTime{};
-    inline REL::Relocation<SetupGeometryFn> g_original;
-    inline ID3D11Device* g_device{ nullptr };
-    inline ID3D11VertexShader* g_vs{ nullptr };
-    inline ID3D11PixelShader* g_ps{ nullptr };
-    inline ID3D11Buffer* g_cb{ nullptr };
-    inline ID3D11BlendState* g_blend{ nullptr };
-    inline ID3D11DepthStencilState* g_depthStandard{ nullptr };
-    inline ID3D11DepthStencilState* g_depthReversed{ nullptr };
-    inline ID3D11DepthStencilState* g_depthNone{ nullptr };
-    inline ID3D11RasterizerState* g_raster{ nullptr };
-    inline ID3D11ShaderResourceView* g_noiseSRV{ nullptr };
-    inline ID3D11SamplerState* g_noiseSampler{ nullptr };
-    inline ID3D11SamplerState* g_clampSampler{ nullptr };
-    inline ID3D11BlendState* g_blendOpaque{ nullptr };
-    inline ID3D11PixelShader* g_compositePS{ nullptr };
-    inline ID3D11Texture2D* g_cloudTex[2]{};
-    inline ID3D11ShaderResourceView* g_cloudSRV[2]{};
-    inline ID3D11RenderTargetView* g_cloudRTV[2]{};
-    inline std::uint32_t g_cloudWidth{ 0 };
-    inline std::uint32_t g_cloudHeight{ 0 };
-    inline int g_cloudIndex{ 0 };
-    inline bool g_hasPrevCloud{ false };
-    inline DirectX::XMFLOAT4 g_prevRows[3]{};
-    inline DirectX::XMFLOAT4 g_prevRow3{};
-    inline ID3D11PixelShader* g_shadowMaskPS{ nullptr };
-    inline ID3D11PixelShader* g_cloudShadowPS{ nullptr };
-    inline ID3D11PixelShader* g_shadowDebugPS{ nullptr };
-    inline ID3D11BlendState* g_blendMultiply{ nullptr };
-    inline ID3D11Texture2D* g_shadowMaskTex{ nullptr };
-    inline ID3D11ShaderResourceView* g_shadowMaskSRV{ nullptr };
-    inline ID3D11RenderTargetView* g_shadowMaskRTV{ nullptr };
-    inline ID3D11ShaderResourceView* g_depthSRV{ nullptr };
-    inline ID3D11Resource* g_depthSRVRes{ nullptr };
-    inline bool g_loggedShadowNoDepth{ false };
-    inline bool g_shadowReady{ false };
-    inline ID3D11PixelShader* g_depthProbePS{ nullptr };
-    inline ID3D11Texture2D* g_probeTex{ nullptr };
-    inline ID3D11RenderTargetView* g_probeRTV{ nullptr };
-    inline ID3D11Texture2D* g_probeReadback{ nullptr };
-    inline std::uint32_t g_probeCounter{ 0 };
-    std::shared_ptr<spdlog::logger> Logger()
-{
-    return spdlog::get("VolClouds");
-}
 
-        void LoadConfigLocked();
-        void ReleaseResources();
-
-
-        bool CompileShaders(ID3D11Device* device);
-        bool LoadNoiseVolume(ID3D11Device* device);
-        bool EnsureCloudTextures(ID3D11Device* device, std::uint32_t width, std::uint32_t height);
-        bool EnsureShadowMask(ID3D11Device* device);
-        ID3D11ShaderResourceView* DepthSRVFrom(ID3D11DeviceContext* ctx, ID3D11DepthStencilView* dsv);
-        bool EnsureProbeResources(ID3D11Device* device);
-        bool EnsureDeviceResources();
-        std::uint32_t SkyModeRaw(const RE::Sky* sky);
-        float WeatherCoverage(const RE::TESWeather* weather);
-        FrameState GatherFrameState(const RE::BSGraphics::State* graphicsState, const RE::Sky* sky, const Config& cfg);
-        bool IsMainSceneTarget(ID3D11DeviceContext* ctx, std::uint32_t expectedWidth, std::uint32_t expectedHeight, TargetInfo* outInfo);
-        void RenderClouds(ID3D11DeviceContext* ctx, const FrameState& frame, const Config& cfg, const TargetInfo& target);
-        struct CloudPassInfo;
-        bool IsCloudPass(void* a_pass, const RE::Sky* sky, CloudPassInfo* outInfo);
-        void* SkyPropertyOfPass(void* a_pass);
-        void PollHotkeys();
-        void Hook_SetupGeometry(void* a_shader, void* a_pass);
-ma once
-#include "pch.h"
-#include <RE/Fallout.h>
-#include <DirectXMath.h>
-#include <chrono>
-#include <cstdint>
-#include <memory>
-#include <mutex>
-#include <string>
-#include "Render/CloudConfig.h"
-
-namespace RadClouds
-{
-    namespace detail
-    {
-        constexpr std::size_t kSetupGeometryVTableSlot = 7;
-        using Config = CloudConfig;
-        using SetupGeometryFn = void (*)(void*, void*);
-    struct alignas(16) CloudCB
-{
-    DirectX::XMFLOAT4X4 invViewProj; DirectX::XMFLOAT4 cameraPos;
-    DirectX::XMFLOAT4 sunDir;
-    DirectX::XMFLOAT4 sunColor; DirectX::XMFLOAT4 ambientColor;
-    DirectX::XMFLOAT4 windAndTime;
-    DirectX::XMFLOAT4 params0;
-    DirectX::XMFLOAT4 params1; DirectX::XMFLOAT4 params2;
-    DirectX::XMFLOAT4 params3;
-    DirectX::XMFLOAT4 params4;
-    DirectX::XMFLOAT4 params5;
-    DirectX::XMFLOAT4 params6;
-    DirectX::XMFLOAT4 params7;
-    DirectX::XMFLOAT4 params8;
-    DirectX::XMFLOAT4 params9;
-    DirectX::XMFLOAT4 params10;
-    DirectX::XMFLOAT4 params11;
-    DirectX::XMFLOAT4 params12;
-    DirectX::XMFLOAT4 params13;
-};
-struct FrameState
-{
-    bool valid{ false };
-    DirectX::XMFLOAT4X4 invViewProj{};
-    DirectX::XMFLOAT4X4 viewProj{};
-    DirectX::XMFLOAT3 cameraPos{};
-    DirectX::XMFLOAT3 sunDir{ 0.0f, 1.0f, 0.0f };
-    float sunIntensity{ 1.0f };
-    DirectX::XMFLOAT3 sunColor{ 1.0f, 1.0f, 1.0f };
-    DirectX::XMFLOAT3 ambientColor{ 0.2f, 0.24f, 0.3f };
-    float windAngle{ 0.0f };
-    float windSpeed{ 0.0f };
-    float coverage{ 0.5f };
-    float flash{ 0.0f };
-    float stormFactor{ 0.0f };
-    float time{ 0.0f };
-    bool reversedDepth{ false };
-    float nearZ{ 0.0f };
-    float farZ{ 1.0f };
-    DirectX::XMFLOAT3 posAdjust{};
-    const char* sourceName{ nullptr };
-    bool hadMatrix{ false };
-    float matrixSample[4]{};
-};
-    inline std::mutex g_mutex;
-    inline Config g_config;
-    inline bool g_installed{ false };
-    inline bool g_loggedNoDepth{ false };
-    inline bool g_loggedTargetSkip{ false };
-    inline std::uint32_t g_lastFrame{ 0xFFFFFFFFu };
-    inline std::uint32_t g_frameBestArea{ 0 };
-    inline std::uint32_t g_frameDraws{ 0 };
-    inline std::uint32_t g_frameMainDraws{ 0 };
-    inline std::uint32_t g_frameSecondaryDraws{ 0 };
-    inline std::uint32_t g_frameSizes[4]{};
-    inline std::uint32_t g_loggedFrameDraws{ 0 };
-    inline void* g_lastTarget{ nullptr };
-    inline std::uint64_t g_hookCalls{ 0 };
-    inline std::uint64_t g_draws{ 0 };
-    inline std::uint64_t g_skipDisabled{ 0 };
-    inline std::uint64_t g_skipMode{ 0 };
-    inline std::uint64_t g_skipPass{ 0 };
-    inline std::uint64_t g_skipTarget{ 0 };
-    inline std::uint64_t g_skipDevice{ 0 };
-    inline std::uint64_t g_skipGather{ 0 };
-    inline bool g_firstHookLogged{ false };
-    inline bool g_disabledLogged{ false };
-    inline bool g_modeLogged{ false };
-    inline bool g_passLogged{ false };
-    inline bool g_targetLogged{ false };
-    inline bool g_deviceLogged{ false };
-    inline bool g_gatherLogged{ false };
-    inline bool g_firstDrawLogged{ false };
-    inline int g_debugOverride{ -1 };
-    inline int g_suppressOverride{ -1 };
-    inline bool g_hotkeyDebugDown{ false };
-    inline bool g_hotkeySuppressDown{ false };
-    inline bool g_firstCloudPassLogged{ false };
-    inline bool g_fallbackLogged{ false };
-    inline bool g_fallbackMode{ false };
-    inline std::uint32_t g_skyTypeCounts[16]{};
-    inline void* g_failedDevice{ nullptr };
-    inline std::chrono::steady_clock::time_point g_startTime{};
-    inline REL::Relocation<SetupGeometryFn> g_original;
-    inline ID3D11Device* g_device{ nullptr };
-    inline ID3D11VertexShader* g_vs{ nullptr };
-    inline ID3D11PixelShader* g_ps{ nullptr };
-    inline ID3D11Buffer* g_cb{ nullptr };
-    inline ID3D11BlendState* g_blend{ nullptr };
-    inline ID3D11DepthStencilState* g_depthStandard{ nullptr };
-    inline ID3D11DepthStencilState* g_depthReversed{ nullptr };
-    inline ID3D11DepthStencilState* g_depthNone{ nullptr };
-    inline ID3D11RasterizerState* g_raster{ nullptr };
-    inline ID3D11ShaderResourceView* g_noiseSRV{ nullptr };
-    inline ID3D11SamplerState* g_noiseSampler{ nullptr };
-    inline ID3D11SamplerState* g_clampSampler{ nullptr };
-    inline ID3D11BlendState* g_blendOpaque{ nullptr };
-    inline ID3D11PixelShader* g_compositePS{ nullptr };
-    inline ID3D11Texture2D* g_cloudTex[2]{};
-    inline ID3D11ShaderResourceView* g_cloudSRV[2]{};
-    inline ID3D11RenderTargetView* g_cloudRTV[2]{};
-    inline std::uint32_t g_cloudWidth{ 0 };
-    inline std::uint32_t g_cloudHeight{ 0 };
-    inline int g_cloudIndex{ 0 };
-    inline bool g_hasPrevCloud{ false };
-    inline DirectX::XMFLOAT4 g_prevRows[3]{};
-    inline DirectX::XMFLOAT4 g_prevRow3{};
-    inline ID3D11PixelShader* g_shadowMaskPS{ nullptr };
-    inline ID3D11PixelShader* g_cloudShadowPS{ nullptr };
-    inline ID3D11PixelShader* g_shadowDebugPS{ nullptr };
-    inline ID3D11BlendState* g_blendMultiply{ nullptr };
-    inline ID3D11Texture2D* g_shadowMaskTex{ nullptr };
-    inline ID3D11ShaderResourceView* g_shadowMaskSRV{ nullptr };
-    inline ID3D11RenderTargetView* g_shadowMaskRTV{ nullptr };
-    inline ID3D11ShaderResourceView* g_depthSRV{ nullptr };
-    inline ID3D11Resource* g_depthSRVRes{ nullptr };
-    inline bool g_loggedShadowNoDepth{ false };
-    inline bool g_shadowReady{ false };
-    inline ID3D11PixelShader* g_depthProbePS{ nullptr };
-    inline ID3D11Texture2D* g_probeTex{ nullptr };
-    inline ID3D11RenderTargetView* g_probeRTV{ nullptr };
-    inline ID3D11Texture2D* g_probeReadback{ nullptr };
-    inline std::uint32_t g_probeCounter{ 0 };
-    std::shared_ptr<spdlog::logger> Logger()
-{
-    return spdlog::get("VolClouds");
-}
-
-        void LoadConfigLocked();
-        void ReleaseResources();
-        bool CompileShaders(ID3D11Device* device);
-        bool LoadNoiseVolume(ID3D11Device* device);
-        bool EnsureCloudTextures(ID3D11Device* device, std::uint32_t width, std::uint32_t height);
-        bool EnsureShadowMask(ID3D11Device* device);
-        ID3D11ShaderResourceView* DepthSRVFrom(ID3D11DeviceContext* ctx, ID3D11DepthStencilView* dsv);
-        bool EnsureProbeResources(ID3D11Device* device);
-        bool EnsureDeviceResources();
-        std::uint32_t SkyModeRaw(const RE::Sky* sky);
-        float WeatherCoverage(const RE::TESWeather* weather);
-        FrameState GatherFrameState(const RE::BSGraphics::State* graphicsState, const RE::Sky* sky, const Config& cfg);
-        bool IsMainSceneTarget(ID3D11DeviceContext* ctx, std::uint32_t expectedWidth, std::uint32_t expectedHeight, TargetInfo* outInfo);
-        void RenderClouds(ID3D11DeviceContext* ctx, const FrameState& frame, const Config& cfg, const TargetInfo& target);
-        struct CloudPassInfo;
-        bool IsCloudPass(void* a_pass, const RE::Sky* sky, CloudPassInfo* outInfo);
-        void* SkyPropertyOfPass(void* a_pass);
-        void PollHotkeys();
-        void Hook_SetupGeometry(void* a_shader, void* a_pass);
     struct TargetInfo
 {
     std::uint32_t format{ 0 };
@@ -352,6 +84,112 @@ struct FrameState
     std::uint32_t samples{ 0 };
     void* textureId{ nullptr };
 };
+
+    inline std::mutex g_mutex;
+    inline Config g_config;
+    inline bool g_installed{ false };
+    inline bool g_loggedNoDepth{ false };
+    inline bool g_loggedTargetSkip{ false };
+    inline std::uint32_t g_lastFrame{ 0xFFFFFFFFu };
+    inline std::uint32_t g_frameBestArea{ 0 };
+    inline std::uint32_t g_frameDraws{ 0 };
+    inline std::uint32_t g_frameMainDraws{ 0 };
+    inline std::uint32_t g_frameSecondaryDraws{ 0 };
+    inline std::uint32_t g_frameSizes[4]{};
+    inline std::uint32_t g_loggedFrameDraws{ 0 };
+    inline void* g_lastTarget{ nullptr };
+    inline std::uint64_t g_hookCalls{ 0 };
+    inline std::uint64_t g_draws{ 0 };
+    inline std::uint64_t g_skipDisabled{ 0 };
+    inline std::uint64_t g_skipMode{ 0 };
+    inline std::uint64_t g_skipPass{ 0 };
+    inline std::uint64_t g_skipTarget{ 0 };
+    inline std::uint64_t g_skipDevice{ 0 };
+    inline std::uint64_t g_skipGather{ 0 };
+    inline bool g_firstHookLogged{ false };
+    inline bool g_disabledLogged{ false };
+    inline bool g_modeLogged{ false };
+    inline bool g_passLogged{ false };
+    inline bool g_targetLogged{ false };
+    inline bool g_deviceLogged{ false };
+    inline bool g_gatherLogged{ false };
+    inline bool g_firstDrawLogged{ false };
+    inline int g_debugOverride{ -1 };
+    inline int g_suppressOverride{ -1 };
+    inline bool g_hotkeyDebugDown{ false };
+    inline bool g_hotkeySuppressDown{ false };
+    inline bool g_firstCloudPassLogged{ false };
+    inline bool g_fallbackLogged{ false };
+    inline bool g_fallbackMode{ false };
+    inline std::uint32_t g_skyTypeCounts[16]{};
+    inline void* g_failedDevice{ nullptr };
+    inline std::chrono::steady_clock::time_point g_startTime{};
+    inline REL::Relocation<SetupGeometryFn> g_original;
+    inline ID3D11Device* g_device{ nullptr };
+    inline ID3D11VertexShader* g_vs{ nullptr };
+    inline ID3D11PixelShader* g_ps{ nullptr };
+    inline ID3D11Buffer* g_cb{ nullptr };
+    inline ID3D11BlendState* g_blend{ nullptr };
+    inline ID3D11DepthStencilState* g_depthStandard{ nullptr };
+    inline ID3D11DepthStencilState* g_depthReversed{ nullptr };
+    inline ID3D11DepthStencilState* g_depthNone{ nullptr };
+    inline ID3D11RasterizerState* g_raster{ nullptr };
+    inline ID3D11ShaderResourceView* g_noiseSRV{ nullptr };
+    inline ID3D11SamplerState* g_noiseSampler{ nullptr };
+    inline ID3D11SamplerState* g_clampSampler{ nullptr };
+    inline ID3D11BlendState* g_blendOpaque{ nullptr };
+    inline ID3D11PixelShader* g_compositePS{ nullptr };
+    inline ID3D11Texture2D* g_cloudTex[2]{};
+    inline ID3D11ShaderResourceView* g_cloudSRV[2]{};
+    inline ID3D11RenderTargetView* g_cloudRTV[2]{};
+    inline std::uint32_t g_cloudWidth{ 0 };
+    inline std::uint32_t g_cloudHeight{ 0 };
+    inline int g_cloudIndex{ 0 };
+    inline bool g_hasPrevCloud{ false };
+    inline DirectX::XMFLOAT4 g_prevRows[3]{};
+    inline DirectX::XMFLOAT4 g_prevRow3{};
+    inline ID3D11PixelShader* g_shadowMaskPS{ nullptr };
+    inline ID3D11PixelShader* g_cloudShadowPS{ nullptr };
+    inline ID3D11PixelShader* g_shadowDebugPS{ nullptr };
+    inline ID3D11BlendState* g_blendMultiply{ nullptr };
+    inline ID3D11Texture2D* g_shadowMaskTex{ nullptr };
+    inline ID3D11ShaderResourceView* g_shadowMaskSRV{ nullptr };
+    inline ID3D11RenderTargetView* g_shadowMaskRTV{ nullptr };
+    inline ID3D11ShaderResourceView* g_depthSRV{ nullptr };
+    inline ID3D11Resource* g_depthSRVRes{ nullptr };
+    inline bool g_loggedShadowNoDepth{ false };
+    inline bool g_shadowReady{ false };
+    inline ID3D11PixelShader* g_depthProbePS{ nullptr };
+    inline ID3D11Texture2D* g_probeTex{ nullptr };
+    inline ID3D11RenderTargetView* g_probeRTV{ nullptr };
+    inline ID3D11Texture2D* g_probeReadback{ nullptr };
+    inline std::uint32_t g_probeCounter{ 0 };
+
+    std::shared_ptr<spdlog::logger> Logger()
+{
+    return spdlog::get("VolClouds");
+}
+
+        void LoadConfigLocked();
+        void ReleaseResources();
+        bool CompileShaders(ID3D11Device* device);
+        bool LoadNoiseVolume(ID3D11Device* device);
+        bool EnsureCloudTextures(ID3D11Device* device, std::uint32_t width, std::uint32_t height);
+        bool EnsureShadowMask(ID3D11Device* device);
+        ID3D11ShaderResourceView* DepthSRVFrom(ID3D11DeviceContext* ctx, ID3D11DepthStencilView* dsv);
+        bool EnsureProbeResources(ID3D11Device* device);
+        bool EnsureDeviceResources();
+        std::uint32_t SkyModeRaw(const RE::Sky* sky);
+        float WeatherCoverage(const RE::TESWeather* weather);
+        FrameState GatherFrameState(const RE::BSGraphics::State* graphicsState, const RE::Sky* sky, const Config& cfg);
+        bool IsMainSceneTarget(ID3D11DeviceContext* ctx, std::uint32_t expectedWidth, std::uint32_t expectedHeight, TargetInfo* outInfo);
+        void RenderClouds(ID3D11DeviceContext* ctx, const FrameState& frame, const Config& cfg, const TargetInfo& target);
+        struct CloudPassInfo;
+        bool IsCloudPass(void* a_pass, const RE::Sky* sky, CloudPassInfo* outInfo);
+        void* SkyPropertyOfPass(void* a_pass);
+        void PollHotkeys();
+        void Hook_SetupGeometry(void* a_shader, void* a_pass);
+
     struct CachedShaderState
 {
     ID3D11VertexShader* vs{};
